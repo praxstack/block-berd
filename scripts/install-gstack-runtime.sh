@@ -7,6 +7,20 @@ set -euo pipefail
 readonly GSTACK_REPO="${GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
 readonly GSTACK_HOME="${GSTACK_HOME:-$HOME/.claude/skills/gstack}"
 readonly GSTACK_HOST="${GSTACK_HOST:-cursor}"
+QUIET=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -q|--quiet) QUIET=1; shift ;;
+    -h|--help)
+      echo "Usage: $0 [-q|--quiet]"
+      echo "  Installs gstack runtime to \$GSTACK_HOME (default: ~/.claude/skills/gstack)"
+      echo "  with --host \$GSTACK_HOST (default: cursor)."
+      exit 0
+      ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
 
 ensure_bun() {
   if command -v bun >/dev/null 2>&1; then
@@ -35,7 +49,9 @@ install_gstack() {
   fi
 
   echo "Running gstack setup (--host $GSTACK_HOST) …"
-  (cd "$GSTACK_HOME" && ./setup --host "$GSTACK_HOST")
+  local setup_args=(--host "$GSTACK_HOST")
+  [ "$QUIET" -eq 1 ] && setup_args+=(-q)
+  (cd "$GSTACK_HOME" && ./setup "${setup_args[@]}")
 }
 
 verify_gstack() {
