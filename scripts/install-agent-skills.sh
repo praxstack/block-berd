@@ -109,5 +109,8 @@ restore_protected_skills
 remove_gstack_fixtures
 remove_junk_dirs
 
+# Skill markdown is copied above; gstack also needs its runtime (bin/, browse, hooks).
+"$repo_root/scripts/install-gstack-runtime.sh"
+
 echo "Installed skills:"
 ls -1 "$repo_root/.agents/skills" | wc -l
