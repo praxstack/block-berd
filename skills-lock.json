@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "skillsCli": "1.5.23",
   "skills": {
     "Make Bot UI": {
       "source": "cursor/plugins",
