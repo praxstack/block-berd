@@ -124,6 +124,20 @@ copies to `src-tauri/binaries/goosed-$(rustc -vV | sed -n 's|host: ||p')`, which
 is the filename Tauri expects. Use `GOOSE_BIN=/path/to/goose` only as an explicit
 local override.
 
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `praxstack/block-berd` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default mattpocock five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Conventions
 
 - Use `@/` imports for frontend code.
