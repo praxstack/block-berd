@@ -39,15 +39,51 @@ discover → interrogate/spec → plan → implement → review → security →
 
 Also installed: **Anthropic dev subset** (MCP builder, frontend-design, webapp-testing, etc.) and **awesome-copilot** (417-skill toolbox).
 
+## Install tiers
+
+The install script supports three tiers via `BERD_SKILLS_TIER`:
+
+| Tier | Env value | What installs |
+| --- | --- | --- |
+| **CORE** (default) | `core` | Layered pipeline packs (~740 skills) |
+| **EXTENDED** | `extended` | CORE + selective S-tier additions below |
+| **ALL** | `all` | EXTENDED + optional hooks (no bulk verticals) |
+
+```bash
+./scripts/install-agent-skills.sh                    # CORE (default)
+BERD_SKILLS_TIER=extended ./scripts/install-agent-skills.sh
+```
+
+The script pins `npx skills` to the version in `skills-lock.json` (`skillsCli` field). Override with `SKILLS_CLI_VERSION=latest` if needed.
+
+## Extended tier additions
+
+| Skill | Source | Role |
+| --- | --- | --- |
+| **hallmark** | [nutlope/hallmark](https://github.com/nutlope/hallmark) | UI taste gate — anti-AI-slop design for greenfield pages and redesigns |
+| **deep-research** | [24601/agent-deep-research](https://github.com/24601/agent-deep-research) | Async deep research (one skill, not four parallel systems) |
+| **last30days** | [mvanhorn/last30days-skill](https://github.com/mvanhorn/last30days-skill) | Recency radar — what people say about a topic in the last 30 days |
+
+## Conflict warnings
+
+Do **not** run multiple full methodologies on the same task — pick one primary workflow:
+
+| Task type | Pick one | Avoid stacking |
+| --- | --- | --- |
+| Planning | pstack `/poteto-mode` **or** superpowers `/writing-plans` **or** gstack `/plan-ceo-review` | All three in one session |
+| Code review | Berd `code-review` **or** compound `ce-code-review` **or** mattpocock `/code-review` | Redundant review passes |
+| UI design | hallmark **or** shadcn `/improve` design sections | Duplicate design audits |
+| Research | `deep-research` **or** `last30days` **or** compound research agents | Four parallel research systems |
+
 ## Install or refresh
 
 ```bash
 ./scripts/install-agent-skills.sh
 ```
 
-The script uses [`npx skills@latest`](https://github.com/vercel-labs/skills) with `-a cursor -y --copy` (Cursor only, project-local). It restores Berd-owned skills after upstream packs are copied and removes junk agent directories.
+The script uses [`npx skills`](https://github.com/vercel-labs/skills) (pinned via `skills-lock.json`) with `-a cursor -y --copy` (Cursor only, project-local). It restores Berd-owned skills after upstream packs are copied and removes junk agent directories.
 
-Run twice to verify idempotence. Expect ~740 skills after a full install.
+Run twice to verify idempotence. Expect ~740 skills after CORE; ~743 after EXTENDED.
 
 ## One-time repo setup
 
@@ -156,13 +192,40 @@ Install manually when relevant:
 npx skills@latest add supabase/agent-skills --skill '*' -a cursor -y --copy
 npx skills@latest add cloudflare/skills --skill '*' -a cursor -y --copy
 npx skills@latest add aws/agent-toolkit-for-aws/skills --skill '*' -a cursor -y --copy
+# Remotion vertical (12 skills — install one, not all):
+npx skills@latest add remotion-dev/skills --skill remotion-best-practices -a cursor -y --copy
+# NVIDIA (343 skills — pick individual skills only):
+npx skills@latest add nvidia/skills --list
+npx skills@latest add nvidia/skills --skill <name> -a cursor -y --copy
 ```
+
+## MCP servers
+
+Project MCP config: `.cursor/mcp.json`
+
+| Server | Command | Purpose |
+| --- | --- | --- |
+| **Context7** | `npx -y @upstash/context7-mcp` | Up-to-date library documentation lookup |
+
+## Optional runtime tools (manual)
+
+These are **not** run by the install script. Install when needed:
+
+| Tool | Install | Notes |
+| --- | --- | --- |
+| **OpenSpec** | `npm install -g @fission-ai/openspec@latest` then `openspec init` | Creates `openspec/` structure for spec-driven workflows |
+| **Graphify** | `uv tool install graphifyy` then `graphify cursor install --project` | Requires `uv` on PATH; visualizes codebase graphs |
+| **Impeccable** | `npx impeccable skills install` (project) then `/impeccable init` in Agent chat | Design-system skill; installs to `.cursor/` and `.agents/` |
+| **agent-browser CLI** | `npm install -g agent-browser` | Required for browser QA layer (see above) |
 
 ## Searchable armory (do NOT bulk-install)
 
 | Pack | Source | Notes |
 | --- | --- | --- |
 | **Microsoft skills** | [microsoft/skills](https://github.com/microsoft/skills) | Large repo — context rot risk. Use `npx skills add microsoft/skills --list` and install individual skills only. |
+| **wshobson/agents** | [wshobson/agents](https://github.com/wshobson/agents) | 94 plugins — do NOT bulk install |
+| **NVIDIA skills** | [nvidia/skills](https://github.com/nvidia/skills) | 343 GPU/AI-Q skills — install individual skills only |
+| **everything-claude-code** | various | Redundant with gstack + superpowers + pstack + compound — skip |
 | Vercel skills CLI | [vercel-labs/skills](https://github.com/vercel-labs/skills) | Package manager for all skills |
 | Anthropic skills | [anthropics/skills](https://github.com/anthropics/skills) | Dev subset installed; browse for more |
 | Supabase | [supabase/agent-skills](https://github.com/supabase/agent-skills) | Postgres/Supabase workflows |

@@ -126,7 +126,18 @@ local override.
 
 ## Agent skills
 
-Project skills live in `.agents/skills/`. Install or refresh with `./scripts/install-agent-skills.sh`. **gstack** (`/plan-ceo-review`, `/ship`, `/qa`, …) also needs its runtime: `./scripts/install-gstack-runtime.sh` (runs automatically at the end of the skill install script). See `.agents/skills/README.md`.
+Project skills live in `.agents/skills/`. Install or refresh:
+
+```bash
+./scripts/install-agent-skills.sh                      # CORE tier (default)
+BERD_SKILLS_TIER=extended ./scripts/install-agent-skills.sh   # + hallmark, deep-research, last30days
+```
+
+**gstack** (`/plan-ceo-review`, `/ship`, `/qa`, …) also needs its runtime: `./scripts/install-gstack-runtime.sh` (runs automatically at the end of the skill install script).
+
+- Stack tiers, conflict warnings, and optional tools: `.agents/skills/README.md`
+- MCP servers (Context7): `.cursor/mcp.json`
+- Skills CLI version pin: `skills-lock.json` → `skillsCli`
 
 ### Issue tracker
 
