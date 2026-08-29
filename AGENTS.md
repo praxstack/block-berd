@@ -126,6 +126,8 @@ local override.
 
 ## Agent skills
 
+Project skills live in `.agents/skills/`. Install or refresh with `./scripts/install-agent-skills.sh`. **gstack** (`/plan-ceo-review`, `/ship`, `/qa`, …) also needs its runtime: `./scripts/install-gstack-runtime.sh` (runs automatically at the end of the skill install script). See `.agents/skills/README.md`.
+
 ### Issue tracker
 
 GitHub Issues on `praxstack/block-berd` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
