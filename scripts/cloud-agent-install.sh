@@ -15,4 +15,4 @@ just _setup-dev-deps
 GOOSE_DEV_MODE=required GOOSE_BUILD_PROFILE=debug ./scripts/ensure-local-goose.sh
 
 # gstack skill markdown lives in .agents/skills/; runtime installs to ~/.claude/skills/gstack.
-"$repo_root/scripts/install-gstack-runtime.sh"
+"$repo_root/scripts/install-gstack-runtime.sh" -q
