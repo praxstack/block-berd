@@ -65,7 +65,7 @@ verify_gstack() {
   fi
   echo "gstack runtime OK: $GSTACK_HOME"
   if [[ -d "$HOME/.cursor/skills" ]]; then
-    echo "Cursor skills: $(find "$HOME/.cursor/skills" -maxdepth 1 -name 'gstack-*' -o -name 'gstack' | wc -l | tr -d ' ') entries under ~/.cursor/skills/"
+    echo "Cursor skills: $(find "$HOME/.cursor/skills" -maxdepth 1 \( -name 'gstack-*' -o -name 'gstack' \) | wc -l | tr -d ' ') entries under ~/.cursor/skills/"
   fi
 }
 
