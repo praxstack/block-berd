@@ -3392,10 +3392,10 @@
       "computedHash": "f928391760d931fc4e9ebb05eb5d2fce84d40c9282786dc2193a615f17c23c2d"
     },
     "retro": {
-      "source": "garrytan/gstack",
+      "source": "mattpocock/skills",
       "sourceType": "github",
-      "skillPath": "retro/SKILL.md",
-      "computedHash": "987cae4484ad2123164d2fc7d2613062099c06f44a96de5c55b56922875f4d09"
+      "skillPath": "skills/in-progress/retro/SKILL.md",
+      "computedHash": "b9bd2e5e0378214bf54d2a293df50490669b845a4c2a71c8f747ce8ab365f53a"
     },
     "review": {
       "source": "garrytan/gstack",

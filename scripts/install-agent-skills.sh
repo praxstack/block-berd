@@ -17,6 +17,7 @@ restore_protected_skills() {
   for skill in "${PROTECTED_SKILLS[@]}"; do
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       && git cat-file -e "HEAD:.agents/skills/${skill}/SKILL.md" 2>/dev/null; then
+      rm -rf "$repo_root/.agents/skills/${skill}"
       git checkout HEAD -- ".agents/skills/${skill}" 2>/dev/null || true
     fi
   done
@@ -36,7 +37,11 @@ remove_junk_dirs() {
 }
 
 remove_gstack_fixtures() {
-  rm -rf "$repo_root/.agents/skills/alpha" "$repo_root/.agents/skills/beta"
+  rm -rf \
+    "$repo_root/.agents/skills/alpha" \
+    "$repo_root/.agents/skills/beta" \
+    "$repo_root/.agents/skills/gstack"
+  find "$repo_root/.agents/skills" -type d -path '*/test/fixtures/*' -prune -exec rm -rf {} + 2>/dev/null || true
 }
 
 # Install all skills from a pack into .agents/skills/ (Cursor only, project-local copy).
@@ -69,7 +74,7 @@ echo "Installing agent skill packs into .agents/skills/ …"
 install_pack shadcn/improve
 install_pack obra/superpowers
 install_pack mattpocock/skills --full-depth
-install_pack garrytan/gstack --full-depth
+install_pack garrytan/gstack
 install_pack cursor/plugins --full-depth
 install_pack vercel-labs/agent-skills
 
