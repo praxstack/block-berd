@@ -94,9 +94,51 @@ agent-browser install          # downloads Chrome for Testing
 agent-browser install --with-deps   # if shared-library errors on Linux
 ```
 
-## gstack Cursor plugin note
+## gstack — two-part install
 
-gstack's Cursor native plugin setup may be broken ([gstack#2361](https://github.com/garrytan/gstack/issues/2361)). The project-local skill copy in `.agents/skills/` works in Cloud Agents. For native Claude/Codex integration, prefer gstack's Claude/Codex install path.
+gstack is **not** just skill markdown. Skills like `/plan-ceo-review` call runtime helpers under `~/.claude/skills/gstack/bin/` (`gstack-skill-start`, telemetry, browse, QA browser, etc.). Copying SKILL.md files alone leaves skills in **degraded mode**.
+
+| Layer | Location | What it provides |
+| --- | --- | --- |
+| Skill markdown | `.agents/skills/plan-ceo-review/` etc. | Workflow instructions (installed by `install-agent-skills.sh`) |
+| Runtime | `~/.claude/skills/gstack/` | Bin scripts, browse binary, Playwright, Cursor skill links |
+
+Install or refresh both:
+
+```bash
+./scripts/install-agent-skills.sh   # markdown + runtime (calls install-gstack-runtime.sh at the end)
+# or runtime only:
+./scripts/install-gstack-runtime.sh
+```
+
+After native setup, Cursor also links skills under `~/.cursor/skills/gstack-*`. Invoke with `/plan-ceo-review`, `/office-hours`, `/ship`, `/qa`, etc. (or attach the skill in Agent chat).
+
+**Key gstack skills in `.agents/skills/`:**
+
+| Skill | Slash / trigger | Role |
+| --- | --- | --- |
+| `plan-ceo-review` | `/plan-ceo-review` | Founder-mode plan review (scope modes, failure maps) |
+| `plan-devex-review` | `/plan-devex-review` | DevEx / DX plan review |
+| `plan-eng-review` | `/plan-eng-review` | Engineering plan review |
+| `plan-design-review` | `/plan-design-review` | Design plan review |
+| `office-hours` | `/office-hours` | Problem framing and design doc |
+| `ship` | `/ship` | PR, CI, merge workflow |
+| `qa` | `/qa` | Browser QA dogfooding |
+| `gstack-upgrade` | `/gstack-upgrade` | Update gstack runtime |
+
+The `gstack` router skill is intentionally **not** vendored here (`install-agent-skills.sh` removes upstream test fixtures including `.agents/skills/gstack`). Use the skills above directly or the `~/.cursor/skills/gstack` router after runtime install.
+
+**Verify runtime:**
+
+```bash
+~/.claude/skills/gstack/bin/gstack-skill-start --skill plan-ceo-review --model claude --parent-pid $$
+```
+
+You should see `SKILL_START_PROTO: 1` (not `SKILL_START: unavailable`). If missing, run `./scripts/install-gstack-runtime.sh`.
+
+`./setup --host cursor` is supported in current gstack (clones into `~/.claude/skills/gstack`, links Cursor skills under `~/.cursor/skills/`).
+
+Cloud Agent environments run `install-gstack-runtime.sh` during `cloud-agent-install.sh`. Re-save the environment after merging so new pods get the runtime.
 
 ## Compound Engineering plugin
 

@@ -13,3 +13,6 @@ export CI="${CI:-true}"
 # Skip git hooks in cloud agents; they are not needed for validation workflows.
 just _setup-dev-deps
 GOOSE_DEV_MODE=required GOOSE_BUILD_PROFILE=debug ./scripts/ensure-local-goose.sh
+
+# gstack skill markdown lives in .agents/skills/; runtime installs to ~/.claude/skills/gstack.
+"$repo_root/scripts/install-gstack-runtime.sh" -q
