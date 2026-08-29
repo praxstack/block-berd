@@ -48,13 +48,17 @@ The install script supports three tiers via `BERD_SKILLS_TIER`:
 | **CORE** (default) | `core` | Layered pipeline packs (~740 skills) |
 | **EXTENDED** | `extended` | CORE + selective S-tier additions below |
 | **ALL** | `all` | EXTENDED + optional hooks (no bulk verticals) |
+| **PRAXSTACK** | `praxstack` | PraxStack skills-and-personas only (no core packs) |
 
 ```bash
 ./scripts/install-agent-skills.sh                    # CORE (default)
 BERD_SKILLS_TIER=extended ./scripts/install-agent-skills.sh
+BERD_SKILLS_TIER=praxstack ./scripts/install-agent-skills.sh   # PraxStack layer only
+BERD_PRAXSTACK_SKILLS=1 ./scripts/install-agent-skills.sh      # CORE + PraxStack
+./scripts/install-praxstack-skills.sh                          # PraxStack only (direct)
 ```
 
-The script pins `npx skills` to the version in `skills-lock.json` (`skillsCli` field). Override with `SKILLS_CLI_VERSION=latest` if needed.
+The script pins `npx skills` to the version in `skills-lock.json` (`skillsCli` field). PraxStack content is pinned in `praxstack-skills.lock.json`. Override with `SKILLS_CLI_VERSION=latest` if needed.
 
 ## Extended tier additions
 
@@ -119,6 +123,24 @@ Re-run those skills if you switch issue trackers or change pstack model assignme
 - `code-review` — Berd pre-PR review (not mattpocock's two-axis review)
 - `create-pr` — open and watch PRs
 - `experimental-features` — experiment registry workflow
+
+## PraxStack layer (skills-and-personas)
+
+[praxstack/skills-and-personas](https://github.com/praxstack/skills-and-personas) is the canonical source for PraxStack workflows: orchestration (`kingmode`, `constellation-team`), role skills (`principal-engineer`, `product-manager`, …), learning (`teach-pro-max`, `techtutor`), and leadership (`superimprove`, `cross-agent-handoff`).
+
+| Artifact | Install location | Install script |
+| --- | --- | --- |
+| **Skills** (~42 canonical + 4 public) | `.agents/skills/` | `scripts/install-praxstack-skills.sh` |
+| **Personas** (multi-file packs) | `docs/agents/personas/praxstack/` | same |
+| **md-personas** (single-file) | `docs/agents/personas/md/` | same |
+| **Goals / workflows** (alignment, high-end-operator) | `docs/agents/workflows/praxstack/` | same |
+| **Goals guide** | `docs/agents/goals.md` | checked in |
+
+Pin: `praxstack-skills.lock.json`. Bump with `./scripts/update-praxstack-skills-lock.sh <ref>`.
+
+Installed by default when `BERD_SKILLS_TIER=extended|all|praxstack`, or force with `BERD_PRAXSTACK_SKILLS=1`. Cloud Agent `cloud-agent-install.sh` runs the PraxStack installer.
+
+**Conflict note:** PraxStack `kingmode` / `super-mode-core` overlap conceptually with pstack `/poteto-mode` and superpowers `/writing-plans` — pick one primary planner per task (see conflict table above).
 
 ## agent-browser CLI
 

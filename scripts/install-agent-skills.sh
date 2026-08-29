@@ -4,11 +4,14 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-# Tier: core (default) | extended | all
-#   core     — layered pipeline packs (default Berd stack)
-#   extended — core + selective S-tier additions (hallmark, deep-research, last30days)
-#   all      — extended + optional verticals (none bulk-installed by default)
+# Tier: core (default) | extended | all | praxstack
+#   core      — layered pipeline packs (default Berd stack)
+#   extended  — core + S-tier additions + PraxStack skills-and-personas
+#   all       — extended + optional verticals (none bulk-installed by default)
+#   praxstack — PraxStack layer only (skills, personas, workflows)
+# BERD_PRAXSTACK_SKILLS=1 forces PraxStack install at any tier (default off for core).
 readonly BERD_SKILLS_TIER="${BERD_SKILLS_TIER:-core}"
+readonly BERD_PRAXSTACK_SKILLS="${BERD_PRAXSTACK_SKILLS:-}"
 
 # Pin skills CLI when skills-lock.json records a version (falls back to latest).
 skills_cli_version() {
@@ -86,11 +89,18 @@ tier_at_least() {
     core) [[ "$want" == "core" ]] ;;
     extended) [[ "$want" == "core" || "$want" == "extended" ]] ;;
     all) true ;;
+    praxstack) [[ "$want" == "praxstack" ]] ;;
     *)
-      echo "error: unknown BERD_SKILLS_TIER=$BERD_SKILLS_TIER (use core|extended|all)" >&2
+      echo "error: unknown BERD_SKILLS_TIER=$BERD_SKILLS_TIER (use core|extended|all|praxstack)" >&2
       exit 1
       ;;
   esac
+}
+
+should_install_praxstack() {
+  [[ -n "$BERD_PRAXSTACK_SKILLS" && "$BERD_PRAXSTACK_SKILLS" != "0" ]] \
+    || tier_at_least extended \
+    || [[ "$BERD_SKILLS_TIER" == "praxstack" ]]
 }
 
 # ── CORE tier ────────────────────────────────────────────────────────────────
@@ -174,8 +184,15 @@ restore_protected_skills
 remove_gstack_fixtures
 remove_junk_dirs
 
+if should_install_praxstack; then
+  "$repo_root/scripts/install-praxstack-skills.sh"
+  restore_protected_skills
+fi
+
 # Skill markdown is copied above; gstack also needs its runtime (bin/, browse, hooks).
-"$repo_root/scripts/install-gstack-runtime.sh"
+if tier_at_least core; then
+  "$repo_root/scripts/install-gstack-runtime.sh"
+fi
 
 echo "Installed skills:"
 ls -1 "$repo_root/.agents/skills" | wc -l
