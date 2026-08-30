@@ -14,5 +14,8 @@ export CI="${CI:-true}"
 just _setup-dev-deps
 GOOSE_DEV_MODE=required GOOSE_BUILD_PROFILE=debug ./scripts/ensure-local-goose.sh
 
+# PraxStack skills-and-personas (project-local skills, personas, workflow prompts).
+"$repo_root/scripts/install-praxstack-skills.sh"
+
 # gstack skill markdown lives in .agents/skills/; runtime installs to ~/.claude/skills/gstack.
 "$repo_root/scripts/install-gstack-runtime.sh" -q

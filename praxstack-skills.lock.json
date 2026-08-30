@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "repo": "https://github.com/praxstack/skills-and-personas.git",
+  "ref": "78a7ee914ae96a56e7e1ad5c27c4dca4b603dc24",
+  "canonicalSkillsDir": "new-skills",
+  "additionalSkills": [
+    "teach-pro-max",
+    "superimprove",
+    "coding-agent-leadership-principles",
+    "cross-agent-handoff"
+  ],
+  "personasDir": "personas",
+  "mdPersonasDir": "md-personas",
+  "workflows": ["prompts/project-alignment", "prompts/high-end-operator"]
+}

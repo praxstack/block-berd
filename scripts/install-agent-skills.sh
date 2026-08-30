@@ -4,6 +4,31 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Tier: core (default) | extended | all | praxstack
+#   core      — layered pipeline packs (default Berd stack)
+#   extended  — core + S-tier additions + PraxStack skills-and-personas
+#   all       — extended + optional verticals (none bulk-installed by default)
+#   praxstack — PraxStack layer only (skills, personas, workflows)
+# BERD_PRAXSTACK_SKILLS=1 forces PraxStack install at any tier (default off for core).
+readonly BERD_SKILLS_TIER="${BERD_SKILLS_TIER:-core}"
+readonly BERD_PRAXSTACK_SKILLS="${BERD_PRAXSTACK_SKILLS:-}"
+
+# Pin skills CLI when skills-lock.json records a version (falls back to latest).
+skills_cli_version() {
+  if [[ -f "$repo_root/skills-lock.json" ]] && command -v jq >/dev/null 2>&1; then
+    local pinned
+    pinned="$(jq -r '.skillsCli // empty' "$repo_root/skills-lock.json" 2>/dev/null || true)"
+    if [[ -n "$pinned" ]]; then
+      echo "$pinned"
+      return
+    fi
+  fi
+  echo "latest"
+}
+
+readonly SKILLS_CLI="$(skills_cli_version)"
+readonly SKILLS_NPX=(npx --yes "skills@${SKILLS_CLI}")
+
 # Berd-owned skills that must not be overwritten by upstream packs.
 readonly -a PROTECTED_SKILLS=(
   assistive-ux
@@ -48,14 +73,89 @@ remove_gstack_fixtures() {
 install_pack() {
   local spec="$1"
   shift
-  npx --yes skills@latest add "$spec" --skill '*' -a cursor -y --copy "$@"
+  "${SKILLS_NPX[@]}" add "$spec" --skill '*' -a cursor -y --copy "$@"
 }
 
 # Install one or more named skills from a pack.
 install_skills() {
   local spec="$1"
   shift
-  npx --yes skills@latest add "$spec" -a cursor -y --copy "$@"
+  "${SKILLS_NPX[@]}" add "$spec" -a cursor -y --copy "$@"
+}
+
+tier_at_least() {
+  local want="$1"
+  case "$BERD_SKILLS_TIER" in
+    core) [[ "$want" == "core" ]] ;;
+    extended) [[ "$want" == "core" || "$want" == "extended" ]] ;;
+    all) true ;;
+    praxstack) [[ "$want" == "praxstack" ]] ;;
+    *)
+      echo "error: unknown BERD_SKILLS_TIER=$BERD_SKILLS_TIER (use core|extended|all|praxstack)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+should_install_praxstack() {
+  [[ -n "$BERD_PRAXSTACK_SKILLS" && "$BERD_PRAXSTACK_SKILLS" != "0" ]] \
+    || tier_at_least extended \
+    || [[ "$BERD_SKILLS_TIER" == "praxstack" ]]
+}
+
+# ── CORE tier ────────────────────────────────────────────────────────────────
+# Layer: discover → interrogate/spec → plan → implement → review → security → browser QA → ship → learn
+install_core_tier() {
+  echo "Installing CORE tier (skills@${SKILLS_CLI}) …"
+
+  install_pack shadcn/improve
+  install_pack obra/superpowers
+  install_pack mattpocock/skills --full-depth
+  install_pack garrytan/gstack
+  install_pack cursor/plugins --full-depth
+  install_pack vercel-labs/agent-skills
+
+  install_pack trailofbits/skills
+
+  install_skills vercel-labs/skills --skill find-skills
+  install_skills vercel-labs/agent-browser --skill agent-browser
+
+  install_skills anthropics/skills \
+    --skill claude-api \
+    --skill doc-coauthoring \
+    --skill frontend-design \
+    --skill mcp-builder \
+    --skill skill-creator \
+    --skill web-artifacts-builder \
+    --skill webapp-testing
+
+  install_pack github/awesome-copilot
+
+  if ! install_pack EveryInc/compound-engineering-plugin 2>/dev/null; then
+    echo "Note: EveryInc/compound-engineering-plugin install failed; use /add-plugin compound-engineering in Cursor."
+  fi
+}
+
+# ── EXTENDED tier ────────────────────────────────────────────────────────────
+# Selective S-tier additions — one skill per pack, project-local only.
+install_extended_tier() {
+  echo "Installing EXTENDED tier …"
+
+  install_skills nutlope/hallmark --skill hallmark
+  install_skills 24601/agent-deep-research --skill deep-research
+  install_skills mvanhorn/last30days-skill --skill last30days
+}
+
+# ── OPTIONAL tier ────────────────────────────────────────────────────────────
+# Documented verticals — install individually, never bulk (context rot).
+# Uncomment or run manually when relevant:
+#
+#   install_skills remotion-dev/skills --skill remotion-best-practices
+#   install_skills nvidia/skills --skill <name>   # 343 skills — pick one
+#   npx skills add microsoft/skills --list        # armory only
+#   npx skills add wshobson/agents --list         # 94 plugins — do NOT bulk install
+install_optional_tier() {
+  echo "OPTIONAL tier: no bulk installs (see .agents/skills/README.md)."
 }
 
 # Optional packs — install manually when relevant (not part of default stack):
@@ -66,51 +166,33 @@ install_skills() {
 #   npx skills@latest add microsoft/skills --list
 #   npx skills@latest add microsoft/skills --skill <name> -a cursor -y --copy
 
-echo "Installing agent skill packs into .agents/skills/ …"
+echo "BERD_SKILLS_TIER=$BERD_SKILLS_TIER"
 
-# Layer: discover → interrogate/spec → plan → implement → review → security → browser QA → ship → learn
+if tier_at_least core; then
+  install_core_tier
+fi
 
-# Core workflow packs
-install_pack shadcn/improve
-install_pack obra/superpowers
-install_pack mattpocock/skills --full-depth
-install_pack garrytan/gstack
-install_pack cursor/plugins --full-depth
-install_pack vercel-labs/agent-skills
+if tier_at_least extended; then
+  install_extended_tier
+fi
 
-# Security layer
-install_pack trailofbits/skills
-
-# Discovery
-install_skills vercel-labs/skills --skill find-skills
-
-# Browser QA
-install_skills vercel-labs/agent-browser --skill agent-browser
-
-# Anthropic dev/engineering subset (skip pure creative/doc examples)
-install_skills anthropics/skills \
-  --skill claude-api \
-  --skill doc-coauthoring \
-  --skill frontend-design \
-  --skill mcp-builder \
-  --skill skill-creator \
-  --skill web-artifacts-builder \
-  --skill webapp-testing
-
-# Toolbox
-install_pack github/awesome-copilot
-
-# Compound engineering (learn layer) — plugin install fallback documented in README
-if ! install_pack EveryInc/compound-engineering-plugin 2>/dev/null; then
-  echo "Note: EveryInc/compound-engineering-plugin install failed; use /add-plugin compound-engineering in Cursor."
+if tier_at_least all; then
+  install_optional_tier
 fi
 
 restore_protected_skills
 remove_gstack_fixtures
 remove_junk_dirs
 
+if should_install_praxstack; then
+  "$repo_root/scripts/install-praxstack-skills.sh"
+  restore_protected_skills
+fi
+
 # Skill markdown is copied above; gstack also needs its runtime (bin/, browse, hooks).
-"$repo_root/scripts/install-gstack-runtime.sh"
+if tier_at_least core; then
+  "$repo_root/scripts/install-gstack-runtime.sh"
+fi
 
 echo "Installed skills:"
 ls -1 "$repo_root/.agents/skills" | wc -l
