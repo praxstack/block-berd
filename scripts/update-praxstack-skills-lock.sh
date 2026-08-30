@@ -5,6 +5,11 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lock_file="$repo_root/praxstack-skills.lock.json"
 
+if [[ ! -f "$lock_file" ]]; then
+  echo "error: missing $lock_file" >&2
+  exit 1
+fi
+
 ref="${1:-main}"
 git_url="$(jq -r '.repo // "https://github.com/praxstack/skills-and-personas.git"' "$lock_file")"
 

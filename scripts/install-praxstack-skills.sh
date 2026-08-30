@@ -78,8 +78,18 @@ fetch_repo() {
     fi
   fi
 
-  local actual
+  verify_pin
+}
+
+verify_pin() {
+  local expected actual
+  expected="$(lock_field ref)"
   actual="$(git -C "$CACHE_DIR" rev-parse HEAD)"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "error: PraxStack cache at ${actual:0:12}, lock requires ${expected:0:12}" >&2
+    echo "  Delete $CACHE_DIR or run ./scripts/update-praxstack-skills-lock.sh" >&2
+    exit 1
+  fi
   echo "PraxStack skills-and-personas @ ${actual:0:12}"
 }
 
