@@ -11,8 +11,5 @@
   ],
   "personasDir": "personas",
   "mdPersonasDir": "md-personas",
-  "workflows": [
-    "prompts/project-alignment",
-    "prompts/high-end-operator"
-  ]
+  "workflows": ["prompts/project-alignment", "prompts/high-end-operator"]
 }
