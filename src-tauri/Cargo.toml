@@ -100,11 +100,14 @@ tauri-plugin-updater = "2"
 tauri-plugin-window-state = "2"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.50.0", features = ["full"] }
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -117,6 +120,7 @@ windows-sys = { version = "0.59", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 coreaudio-rs = "0.14.2"
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSRunningApplication", "NSImage", "NSMenu", "NSMenuItem", "NSAlert", "NSButton", "NSControl", "NSCell", "NSResponder", "NSView"] }
 objc2-avf-audio = { version = "0.3.2", features = ["AVAudioApplication", "block2"] }
@@ -124,6 +128,9 @@ objc2-core-audio = "0.3.2"
 objc2-foundation = { version = "0.3.2", features = ["NSDictionary", "NSError", "NSFileManager", "NSObject", "NSProcessInfo", "NSString", "NSURL"] }
 objc2-user-notifications = "0.3.2"
 rodio = { version = "0.22", default-features = false, features = ["playback"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "vendored"] }
 
 
 [features]

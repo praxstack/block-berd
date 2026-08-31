@@ -53,6 +53,26 @@ describe("voice setup readiness", () => {
     ).toBe(false);
   });
 
+  it("requires the configured OpenAI TTS key and TTS availability for OpenAI output", () => {
+    const configured = { ttsConfigured: true, ttsAvailable: true } as never;
+    expect(
+      isVoiceSetupReady(pocket, null, null, "parakeet", "openai", configured),
+    ).toBe(true);
+    expect(isVoiceSetupReady(pocket, null, null, "parakeet", "openai")).toBe(
+      false,
+    );
+  });
+
+  it("allows configured OpenAI input when TTS is unavailable", () => {
+    const configuredStt = { sttConfigured: true, ttsAvailable: false } as never;
+    expect(
+      isVoiceSetupReady(pocket, null, null, "openai", "pocket", configuredStt),
+    ).toBe(true);
+    expect(isVoiceSetupReady(pocket, null, null, "openai", "pocket")).toBe(
+      false,
+    );
+  });
+
   it("uses native macOS speech readiness instead of Parakeet when selected", () => {
     expect(
       isVoiceSetupReady(

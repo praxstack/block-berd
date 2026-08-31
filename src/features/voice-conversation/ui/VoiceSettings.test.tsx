@@ -50,7 +50,42 @@ const microphonePermissionState = vi.hoisted(() => ({
   openSettingsError: false,
   openSettings: vi.fn(),
 }));
+const openAiStatusState = vi.hoisted(() => ({
+  current: {
+    sttConfigured: true,
+    ttsConfigured: true,
+    sttConfigurationSource: "default" as "default" | "environment",
+    ttsConfigurationSource: "default" as "default" | "environment",
+    sttUnavailableReason: null,
+    ttsUnavailableReason: null,
+    transcriptionModel: "gpt-live-transcribe",
+    speechModel: "gpt-4o-mini-tts",
+    speechVoice: "marin",
+    playbackSpeed: 1,
+    ttsAvailable: true,
+    unavailableReason: null as string | null,
+  },
+}));
+const openAiApiMocks = vi.hoisted(() => ({
+  setSttApiKey: vi.fn(() => Promise.resolve()),
+  clearSttApiKey: vi.fn(() => Promise.resolve()),
+  setTtsApiKey: vi.fn(() => Promise.resolve()),
+  clearTtsApiKey: vi.fn(() => Promise.resolve()),
+}));
 
+vi.mock("../api/openAiVoice", () => ({
+  setOpenAiPlaybackSpeed: vi.fn(() => Promise.resolve()),
+  setOpenAiSttApiKey: openAiApiMocks.setSttApiKey,
+  clearOpenAiSttApiKey: openAiApiMocks.clearSttApiKey,
+  setOpenAiTtsApiKey: openAiApiMocks.setTtsApiKey,
+  clearOpenAiTtsApiKey: openAiApiMocks.clearTtsApiKey,
+}));
+vi.mock("../hooks/useOpenAiVoiceSetup", () => ({
+  useOpenAiVoiceSetup: () => ({
+    status: openAiStatusState.current,
+    error: null,
+  }),
+}));
 vi.mock("../hooks/usePocketVoiceSetup", () => ({
   usePocketVoiceSetup: () => setupState.current,
 }));
@@ -191,6 +226,210 @@ describe("VoiceSettings", () => {
     };
     interruptionState.mode = "automatic";
     siriSetupState.current = siriSetup();
+    openAiStatusState.current = {
+      sttConfigured: true,
+      ttsConfigured: true,
+      sttConfigurationSource: "default",
+      ttsConfigurationSource: "default",
+      sttUnavailableReason: null,
+      ttsUnavailableReason: null,
+      transcriptionModel: "gpt-live-transcribe",
+      speechModel: "gpt-4o-mini-tts",
+      speechVoice: "marin",
+      playbackSpeed: 1,
+      ttsAvailable: true,
+      unavailableReason: null,
+    };
+    openAiApiMocks.setTtsApiKey.mockClear();
+    openAiApiMocks.clearTtsApiKey.mockClear();
+    openAiApiMocks.setSttApiKey.mockClear();
+    openAiApiMocks.clearSttApiKey.mockClear();
+  });
+
+  it("renders independently selected OpenAI input and output settings", async () => {
+    inputState.backend = "openai";
+    outputState.backend = "openai";
+    setupState.current = setup(pocketStatus());
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText("Uses gpt-live-transcribe."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/gpt-4o-mini-tts.*marin voice/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Playback speed")).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        "Saved securely and shared by OpenAI transcription and voice playback.",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("saves the shared OpenAI voice key from the speech-to-text settings", async () => {
+    inputState.backend = "openai";
+    setupState.current = setup(pocketStatus({ pocketInstalled: true }));
+    renderWithProviders(<VoiceSettings />);
+
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByLabelText("OpenAI speech-to-text API key"),
+      "stt-secret",
+    );
+    await user.click(screen.getAllByRole("button", { name: "Save key" })[0]);
+
+    expect(openAiApiMocks.setSttApiKey).toHaveBeenCalledWith("stt-secret");
+  });
+
+  it("labels purpose-specific environment overrides", async () => {
+    outputState.backend = "openai";
+    openAiStatusState.current = {
+      ...openAiStatusState.current,
+      ttsConfigurationSource: "environment",
+    };
+    setupState.current = setup(pocketStatus());
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText(
+        "Development configuration is overridden by the Berd process environment.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("labels speech-to-text environment overrides", async () => {
+    inputState.backend = "openai";
+    openAiStatusState.current = {
+      ...openAiStatusState.current,
+      sttConfigurationSource: "environment",
+    };
+    setupState.current = setup(pocketStatus());
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText(
+        "Development configuration is overridden by the Berd process environment.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("saves the shared OpenAI voice key from the text-to-speech settings", async () => {
+    outputState.backend = "openai";
+    setupState.current = setup(pocketStatus({ parakeetInstalled: true }));
+    renderWithProviders(<VoiceSettings />);
+
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByLabelText("OpenAI text-to-speech API key"),
+      "tts-secret",
+    );
+    await user.click(screen.getByRole("button", { name: "Save key" }));
+
+    expect(openAiApiMocks.setTtsApiKey).toHaveBeenCalledWith("tts-secret");
+  });
+
+  it("uses OpenAI guidance when only the selected OpenAI input is not ready", async () => {
+    inputState.backend = "openai";
+    outputState.backend = "pocket";
+    openAiStatusState.current = {
+      ...openAiStatusState.current,
+      sttConfigured: false,
+    };
+    setupState.current = setup(pocketStatus({ pocketInstalled: true }));
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText(
+        "OpenAI transcription is not ready. Add the shared OpenAI voice API key below, then try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Parakeet STT is not installed/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports missing OpenAI input and Pocket output together", async () => {
+    inputState.backend = "openai";
+    outputState.backend = "pocket";
+    openAiStatusState.current = {
+      ...openAiStatusState.current,
+      sttConfigured: false,
+    };
+    setupState.current = setup(pocketStatus({ pocketInstalled: false }));
+
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText(
+        "The shared OpenAI voice API key is missing, and Pocket TTS is not installed. Complete both steps below to use Voice Conversation.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("reports missing OpenAI input and Siri output together", async () => {
+    inputState.backend = "openai";
+    outputState.backend = "siri";
+    openAiStatusState.current = {
+      ...openAiStatusState.current,
+      sttConfigured: false,
+    };
+    const current = siriSetup();
+    siriSetupState.current = {
+      ...current,
+      status: current.status
+        ? {
+            ...current.status,
+            selectedVoice: null,
+            selectedVoiceInstalled: false,
+          }
+        : null,
+    };
+
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText(
+        "The shared OpenAI voice API key is missing, and no installed Siri voice is selected. Complete both steps below to use Voice Conversation.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the TTS platform restriction for configured OpenAI input", async () => {
+    inputState.backend = "openai";
+    outputState.backend = "pocket";
+    openAiStatusState.current = {
+      ...openAiStatusState.current,
+      ttsAvailable: false,
+      unavailableReason: "unsupportedPlatform",
+    };
+    setupState.current = setup(pocketStatus({ pocketInstalled: true }));
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText("Uses gpt-live-transcribe."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/playback is currently supported on macOS only/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses OpenAI guidance when the selected OpenAI output is not ready", async () => {
+    outputState.backend = "openai";
+    openAiStatusState.current = {
+      ...openAiStatusState.current,
+      ttsConfigured: false,
+    };
+    setupState.current = setup(pocketStatus({ parakeetInstalled: true }));
+    renderWithProviders(<VoiceSettings />);
+
+    expect(
+      await screen.findByText(
+        "OpenAI voice playback is not ready. Add the shared OpenAI voice API key below, then try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Pocket TTS is not installed/),
+    ).not.toBeInTheDocument();
   });
 
   it("shows interruption modes without VAD controls", () => {

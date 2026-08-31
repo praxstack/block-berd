@@ -65,6 +65,7 @@ import type { GlobalComposerHandoffRect } from "@/shared/ui/GlobalComposerPill";
 import { useVoiceConversationController } from "@/features/voice-conversation/hooks/useVoiceConversationController";
 import { usePocketVoiceSetup } from "@/features/voice-conversation/hooks/usePocketVoiceSetup";
 import { useMacSpeechSetup } from "@/features/voice-conversation/hooks/useMacSpeechSetup";
+import { useOpenAiVoiceSetup } from "@/features/voice-conversation/hooks/useOpenAiVoiceSetup";
 import { useSiriVoiceSetup } from "@/features/voice-conversation/hooks/useSiriVoiceSetup";
 import {
   isMacSpeechAvailable,
@@ -234,6 +235,10 @@ export function ChatView({
     isMacSpeechAvailable(macSpeechSetup.status, macSpeechSetup.loading),
   );
   const voiceOutput = useVoiceOutputPreference();
+  const openAiVoiceSetup = useOpenAiVoiceSetup(
+    capabilities.voiceConversation &&
+      (voiceInput.backend === "openai" || voiceOutput.backend === "openai"),
+  );
   const siriVoiceSetup = useSiriVoiceSetup(
     capabilities.voiceConversation && voiceOutput.backend === "siri",
   );
@@ -243,7 +248,20 @@ export function ChatView({
     siriVoiceSetup.status,
     voiceInput.backend,
     voiceOutput.backend,
+    openAiVoiceSetup.status,
   );
+  const voiceAdmissionPermanentlyBlocked =
+    composerBinding.target.kind === "existingSession" &&
+    Boolean(composerBinding.target.admission.blockingReason);
+  const voiceDeliveryTemporarilyBlocked =
+    !voiceAdmissionPermanentlyBlocked &&
+    ((composerBinding.target.kind === "existingSession" &&
+      composerBinding.target.admission.securityConfirmationPending) ||
+      controller.projectMetadataPending ||
+      controller.isCompactingContext ||
+      controller.isLoadingHistory ||
+      !controller.workspaceContextReady ||
+      controller.queue.queuedMessage !== null);
   const voiceConversation = useVoiceConversationController({
     sessionId,
     // Voice delivery only needs to wait for admission. Holding its per-session
@@ -264,13 +282,9 @@ export function ChatView({
       });
     },
     readOnly: Boolean(readOnlyStatus),
-    disabled:
-      admissionBlocked ||
-      controller.projectMetadataPending ||
-      controller.isCompactingContext ||
-      controller.isLoadingHistory ||
-      !controller.workspaceContextReady ||
-      controller.queue.queuedMessage !== null,
+    routeBlocked: voiceDeliveryTemporarilyBlocked,
+    routeUnavailable: voiceAdmissionPermanentlyBlocked,
+    disabled: admissionBlocked || voiceDeliveryTemporarilyBlocked,
   });
   const isAgentBuilderOpen = agentBuilderOpenForLayout;
   const patchSession = useChatSessionStore((s) => s.patchSession);
