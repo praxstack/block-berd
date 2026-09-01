@@ -82,6 +82,7 @@ import {
 import { selectLocalMessageCountsBySession } from "@/features/chat/stores/chatSelectors";
 import { resolveSessionCycleTarget } from "@/features/sessions/lib/sessionCycle";
 import { useSessionWindowStore } from "@/features/chat/stores/sessionWindowStore";
+import { loadPersistedChatWorkspaceMetadata } from "@/features/chat/stores/workspaceAttachmentPersistence";
 import {
   selectActiveSessionId,
   selectHasHydratedSessions,
@@ -3950,6 +3951,10 @@ export function AppShell({
                 error instanceof SessionNotFoundError
                   ? ("session_not_found" as const)
                   : ("backend_archive_failed" as const),
+              detail:
+                error instanceof SessionNotFoundError
+                  ? undefined
+                  : formatAcpErrorMessage(error),
             };
           }
           let cleanupFailureReason:
@@ -4152,7 +4157,12 @@ export function AppShell({
   }, [handleSelectSession]);
 
   const handleSelectSearchResult = useCallback(
-    (sessionId: string, messageId?: string, query?: string) => {
+    (
+      sessionId: string,
+      messageId?: string,
+      query?: string,
+      session?: ChatSession,
+    ) => {
       guardAppNavigation(() => {
         setSearchDialogOpen(false);
         if (messageId) {
@@ -4176,6 +4186,21 @@ export function AppShell({
             void focusSessionWindow(sessionId);
           }
           return;
+        }
+        // Server-discovered sessions are not in the store yet; hydrate from
+        // the row's own metadata synchronously so activation renders the chat
+        // instead of falling through to home. The row mapping skipped
+        // workspace persistence, so restore it here — opening the session
+        // must land in the workspace the user last worked in.
+        if (session && !useChatSessionStore.getState().getSession(sessionId)) {
+          const persisted = loadPersistedChatWorkspaceMetadata(sessionId);
+          useChatSessionStore.getState().addSession({
+            ...session,
+            workspaceAttachments:
+              persisted?.workspaceAttachments ?? session.workspaceAttachments,
+            activeWorkspaceId:
+              persisted?.activeWorkspaceId ?? session.activeWorkspaceId,
+          });
         }
         selectSessionDirect(sessionId);
       });
