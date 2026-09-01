@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   canonicalizeAuthorizedWorkspaceDirectory: vi.fn(),
   resolvePath: vi.fn(),
   getGitState: vi.fn(),
+  getHomeDir: vi.fn(),
   resolveArtifactRootPath: vi.fn(),
 }));
 vi.mock("@/shared/api/pathResolver", () => ({
@@ -20,6 +21,13 @@ vi.mock("@/shared/api/pathResolver", () => ({
 vi.mock("@/shared/api/git", () => ({
   getGitState: (...args: unknown[]) => mocks.getGitState(...args),
 }));
+vi.mock("@/shared/api/system", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/shared/api/system")>();
+  return {
+    ...actual,
+    getHomeDir: (...args: unknown[]) => mocks.getHomeDir(...args),
+  };
+});
 vi.mock(
   "@/shared/artifacts/sessionArtifactLocation",
   async (importOriginal) => {
@@ -76,6 +84,7 @@ describe("attachSessionFolder", () => {
         path: parts[0],
       }));
     mocks.getGitState.mockReset().mockResolvedValue(gitState);
+    mocks.getHomeDir.mockReset().mockResolvedValue("/Users/me");
     mocks.resolveArtifactRootPath.mockReset().mockResolvedValue("/artifacts");
   });
 
@@ -106,6 +115,38 @@ describe("attachSessionFolder", () => {
     expect(localStorage.getItem("goose:chat-workspace-metadata")).toContain(
       "/repo-wt",
     );
+  });
+
+  it("rejects attach/detach/replace for remote sessions before touching local path checks", async () => {
+    useChatSessionStore.setState({
+      sessions: [{ ...session, remoteHost: "devbox" }],
+    });
+
+    await expect(
+      attachSessionFolder("session-1", "/repo-wt"),
+    ).rejects.toMatchObject({
+      name: "FolderAttachmentError",
+      message: expect.stringContaining("devbox"),
+    });
+    await expect(
+      detachSessionFolder("session-1", "/repo"),
+    ).rejects.toMatchObject({ name: "FolderAttachmentError" });
+    await expect(
+      replaceSessionFolder("session-1", "/repo", "/repo-wt"),
+    ).rejects.toMatchObject({ name: "FolderAttachmentError" });
+
+    // The guard fires before any local canonicalization or git probe: those
+    // Tauri commands act on the local filesystem and the session's paths
+    // live on the SSH host.
+    expect(
+      mocks.canonicalizeAuthorizedWorkspaceDirectory,
+    ).not.toHaveBeenCalled();
+    expect(mocks.resolvePath).not.toHaveBeenCalled();
+    expect(mocks.getGitState).not.toHaveBeenCalled();
+    expect(
+      useChatSessionStore.getState().getSession("session-1")
+        ?.workspaceAttachments ?? [],
+    ).toHaveLength(0);
   });
 
   it("merges concurrent registrations against current store state", async () => {
@@ -610,5 +651,98 @@ describe("attachSessionFolder", () => {
     expect(getPendingSessionWorkspaceActivation("session-1")).toMatchObject({
       path: "/repo-wt",
     });
+  });
+
+  it("attaches over a home-spelled implicit default in single-workspace mode", async () => {
+    const { setMultiWorkspaceEnabled } = await import(
+      "@/features/workspaces/multiWorkspacePreference"
+    );
+    setMultiWorkspaceEnabled(false);
+    try {
+      useChatSessionStore.setState({
+        sessions: [
+          {
+            ...session,
+            workingDir: "/Users/me/goose artifacts",
+            workspaceAttachments: [
+              {
+                id: "path:~/goose artifacts",
+                path: "~/goose artifacts",
+                kind: "directory",
+                source: "inferred",
+                usedByAgent: true,
+              },
+            ],
+          },
+        ],
+      });
+      mocks.resolveArtifactRootPath.mockResolvedValue(
+        "/Users/me/goose artifacts",
+      );
+
+      await expect(
+        attachSessionFolder("session-1", "/repo-wt", {
+          enforceWorkspaceLimit: true,
+        }),
+      ).resolves.toMatchObject({ path: "/repo-wt" });
+      expect(
+        useChatSessionStore
+          .getState()
+          .getSession("session-1")
+          ?.workspaceAttachments?.filter(
+            (attachment) => attachment.source !== "excluded",
+          )
+          .map(({ path }) => path),
+      ).toEqual(["/repo-wt"]);
+    } finally {
+      setMultiWorkspaceEnabled(true);
+    }
+  });
+
+  it("replaces an implicit default whose stored path uses the other home spelling", async () => {
+    useChatSessionStore.setState({
+      sessions: [
+        {
+          ...session,
+          workingDir: "/Users/me/goose artifacts",
+          workspaceAttachments: [
+            {
+              id: "path:~/goose artifacts",
+              path: "~/goose artifacts",
+              kind: "directory",
+              source: "inferred",
+              usedByAgent: true,
+            },
+          ],
+        },
+      ],
+    });
+    mocks.resolvePath.mockImplementation(
+      async ({ parts }: { parts: string[] }) => ({
+        path: parts[0].replace(/^~/, "/Users/me"),
+      }),
+    );
+
+    await expect(
+      replaceSessionFolder(
+        "session-1",
+        "/Users/me/goose artifacts",
+        "/repo-wt",
+      ),
+    ).resolves.toMatchObject({
+      oldPath: "~/goose artifacts",
+      newPath: "/repo-wt",
+      cwd: "/repo-wt",
+      cwdStatus: "pending",
+    });
+    expect(
+      useChatSessionStore
+        .getState()
+        .getSession("session-1")
+        ?.workspaceAttachments?.filter(
+          (attachment) => attachment.source !== "excluded",
+        )
+        .map(({ path }) => path),
+    ).toEqual(["/repo-wt"]);
   });
 });
