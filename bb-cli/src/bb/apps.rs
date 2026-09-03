@@ -46,6 +46,7 @@ const APPS_E2E_AUTH_URL_ENV_VAR: &str = "BB_APPS_E2E_AUTH_URL";
 const APPS_E2E_CREDENTIAL_ENV_VAR: &str = "BB_APPS_E2E_CREDENTIAL";
 const APPS_CONTRACT_PATH: &str = "/v1/agent/contract";
 const APPS_PLAN_PATH: &str = "/v1/agent/apps/plan";
+const MAX_DEBUG_TAIL_LINES: u16 = 1000;
 const HOTPOD_AGENT_CLIENT_VERSION_HEADER: &str = "X-Hotpod-Agent-Client-Version";
 // Compose may synchronously wait up to two minutes for an initialize or
 // deploy rollout. Leave enough headroom for the response to traverse ingress.
@@ -72,6 +73,59 @@ pub fn command() -> Command {
             Command::new("contract")
                 .about(
                     "Read the control-plane contract, runtime metadata, and supported operations",
+                ),
+        ))
+        .subcommand(control_plane_args(
+            Command::new("list")
+                .about("List apps the current caller can manage")
+                .long_about(
+                    "List Apps Platform apps the current caller owns or is approved to publish. \
+                     Deleted apps remain hidden unless explicitly included.",
+                )
+                .arg(
+                    Arg::new("scope")
+                        .long("scope")
+                        .value_name("SCOPE")
+                        .value_parser(["manageable", "owned", "publisher"])
+                        .help("Filter by relationship to the app (control-plane default: manageable)"),
+                )
+                .arg(
+                    Arg::new("include-deleted")
+                        .long("include-deleted")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Include logically deleted apps"),
+                ),
+        ))
+        .subcommand(control_plane_args(
+            Command::new("get")
+                .about("Get one manageable app and its recorded versions")
+                .arg(
+                    Arg::new("app-id")
+                        .value_name("APP_ID")
+                        .required(true)
+                        .help("App identifier returned by `bb apps list` or `bb apps create`"),
+                )
+                .arg(
+                    Arg::new("environment")
+                        .long("environment")
+                        .value_name("ENVIRONMENT")
+                        .help("Optional Compose environment override"),
+                ),
+        ))
+        .subcommand(control_plane_args(
+            Command::new("versions")
+                .about("List active and rollback-candidate versions for an app")
+                .arg(
+                    Arg::new("app-id")
+                        .value_name("APP_ID")
+                        .required(true)
+                        .help("App identifier returned by `bb apps list` or `bb apps create`"),
+                )
+                .arg(
+                    Arg::new("environment")
+                        .long("environment")
+                        .value_name("ENVIRONMENT")
+                        .help("Optional Compose environment override"),
                 ),
         ))
         .subcommand(control_plane_args(
@@ -152,6 +206,95 @@ pub fn command() -> Command {
                         .help("Optional deployment identifier"),
                 ),
         ))
+        .subcommand(control_plane_args(
+            Command::new("rollback")
+                .about("Roll back an app to a previous or selected version")
+                .long_about(
+                    "Request one Apps Platform rollback. Omit --version-id to select the previous \
+                     active version, or pass an uploaded version explicitly. The response preserves \
+                     the control-plane rollback, readiness, and next-call fields without hidden polling.",
+                )
+                .arg(
+                    Arg::new("app-id")
+                        .value_name("APP_ID")
+                        .required(true)
+                        .help("App identifier returned by `bb apps list` or `bb apps create`"),
+                )
+                .arg(
+                    Arg::new("environment")
+                        .long("environment")
+                        .value_name("ENVIRONMENT")
+                        .help("Optional Compose environment override"),
+                )
+                .arg(
+                    Arg::new("version-id")
+                        .long("version-id")
+                        .value_name("VERSION_ID")
+                        .help("Uploaded version to activate; omit to select the previous version"),
+                ),
+        ))
+        .subcommand(control_plane_args(
+            Command::new("ready")
+                .about("Check readiness for an exact deployed app version")
+                .long_about(
+                    "Request one control-plane readiness snapshot for an exact deployed app version. \
+                     The response includes active-route, runner, readiness, and diagnostic fields; \
+                     callers can follow the returned guidance to poll again.",
+                )
+                .arg(
+                    Arg::new("app-id")
+                        .value_name("APP_ID")
+                        .required(true)
+                        .help("App identifier returned by `bb apps create`"),
+                )
+                .arg(
+                    Arg::new("version-id")
+                        .long("version-id")
+                        .value_name("VERSION_ID")
+                        .required(true)
+                        .help("Exact version identifier returned by `bb apps deploy`"),
+                )
+                .arg(
+                    Arg::new("environment")
+                        .long("environment")
+                        .value_name("ENVIRONMENT")
+                        .help("Optional Compose environment override"),
+                ),
+        ))
+        .subcommand(control_plane_args(
+            Command::new("debug")
+                .about("Collect a bounded diagnostic snapshot for an app")
+                .long_about(
+                    "Request one control-plane diagnostic snapshot, preserving partial results when \
+                     individual collectors fail. Optionally correlate the snapshot to a deployed \
+                     version and control the number of log lines collected per container.",
+                )
+                .arg(
+                    Arg::new("app-id")
+                        .value_name("APP_ID")
+                        .required(true)
+                        .help("App identifier returned by `bb apps create`"),
+                )
+                .arg(
+                    Arg::new("version-id")
+                        .long("version-id")
+                        .value_name("VERSION_ID")
+                        .help("Optional version identifier to correlate with the active route"),
+                )
+                .arg(
+                    Arg::new("environment")
+                        .long("environment")
+                        .value_name("ENVIRONMENT")
+                        .help("Optional Compose environment override"),
+                )
+                .arg(
+                    Arg::new("tail-lines")
+                        .long("tail-lines")
+                        .value_name("N")
+                        .value_parser(clap::value_parser!(u16).range(1..=MAX_DEBUG_TAIL_LINES.into()))
+                        .help("Log lines to collect per container (1-1000; control-plane default: 200)"),
+                ),
+        ))
 }
 
 fn control_plane_args(command: Command) -> Command {
@@ -187,8 +330,14 @@ fn dispatch(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
     runner::ensure_org_configured(config)?;
     match matches.subcommand() {
         Some(("contract", contract_matches)) => run_contract(config, contract_matches),
+        Some(("list", list_matches)) => run_list(config, list_matches),
+        Some(("get", get_matches)) => run_get(config, get_matches),
+        Some(("versions", versions_matches)) => run_versions(config, versions_matches),
         Some(("create", create_matches)) => run_create(config, create_matches),
         Some(("deploy", deploy_matches)) => run_deploy(config, deploy_matches),
+        Some(("rollback", rollback_matches)) => run_rollback(config, rollback_matches),
+        Some(("ready", ready_matches)) => run_ready(config, ready_matches),
+        Some(("debug", debug_matches)) => run_debug(config, debug_matches),
         _ => anyhow::bail!("expected an apps subcommand"),
     }
 }
@@ -205,6 +354,34 @@ fn run_contract(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
     let credential = ComposeSessionCredential::from_config(config)?;
     let contract = client.contract(&credential)?;
     print_json(&contract)
+}
+
+fn run_list(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
+    let scope = matches.get_one::<String>("scope").map(String::as_str);
+    let include_deleted = matches.get_flag("include-deleted");
+    let (client, credential) = control_plane_context(config, matches)?;
+    let response = client.list_apps(&credential, scope, include_deleted)?;
+    print_json(&response)
+}
+
+fn run_get(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
+    let app_id = matches
+        .get_one::<String>("app-id")
+        .context("expected app id")?;
+    let environment = matches.get_one::<String>("environment").map(String::as_str);
+    let (client, credential) = control_plane_context(config, matches)?;
+    let response = client.get_app(&credential, app_id, environment)?;
+    print_json(&response)
+}
+
+fn run_versions(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
+    let app_id = matches
+        .get_one::<String>("app-id")
+        .context("expected app id")?;
+    let environment = matches.get_one::<String>("environment").map(String::as_str);
+    let (client, credential) = control_plane_context(config, matches)?;
+    let response = client.versions(&credential, app_id, environment)?;
+    print_json(&response)
 }
 
 fn run_create(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
@@ -281,6 +458,44 @@ fn run_deploy(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
     print_json(&response)
 }
 
+fn run_rollback(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
+    let app_id = matches
+        .get_one::<String>("app-id")
+        .context("expected app id")?;
+    let request = RollbackRequest {
+        environment: matches.get_one::<String>("environment").map(String::as_str),
+        version_id: matches.get_one::<String>("version-id").map(String::as_str),
+    };
+    let (client, credential) = control_plane_context(config, matches)?;
+    let response = client.rollback(&credential, app_id, &request)?;
+    print_json(&response)
+}
+
+fn run_ready(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
+    let app_id = matches
+        .get_one::<String>("app-id")
+        .context("expected app id")?;
+    let version_id = matches
+        .get_one::<String>("version-id")
+        .context("expected version id")?;
+    let environment = matches.get_one::<String>("environment").map(String::as_str);
+    let (client, credential) = control_plane_context(config, matches)?;
+    let response = client.ready(&credential, app_id, version_id, environment)?;
+    print_json(&response)
+}
+
+fn run_debug(config: &SkillsConfig, matches: &ArgMatches) -> Result<()> {
+    let app_id = matches
+        .get_one::<String>("app-id")
+        .context("expected app id")?;
+    let environment = matches.get_one::<String>("environment").map(String::as_str);
+    let version_id = matches.get_one::<String>("version-id").map(String::as_str);
+    let tail_lines = matches.get_one::<u16>("tail-lines").copied();
+    let (client, credential) = control_plane_context(config, matches)?;
+    let response = client.debug(&credential, app_id, environment, version_id, tail_lines)?;
+    print_json(&response)
+}
+
 fn control_plane_context(
     config: &SkillsConfig,
     matches: &ArgMatches,
@@ -309,6 +524,14 @@ struct PlanRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     persistence: Option<&'a str>,
     client_version: &'a str,
+}
+
+#[derive(Serialize)]
+struct RollbackRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version_id: Option<&'a str>,
 }
 
 #[derive(Default)]
@@ -542,6 +765,48 @@ impl ControlPlaneClient {
         })
     }
 
+    fn list_apps(
+        &self,
+        credential: &ComposeSessionCredential,
+        scope: Option<&str>,
+        include_deleted: bool,
+    ) -> Result<Value> {
+        let mut query = Vec::new();
+        if let Some(scope) = scope {
+            query.push(("scope", scope.to_string()));
+        }
+        if include_deleted {
+            query.push(("include_deleted", "true".to_string()));
+        }
+        let url = self.apps_url(&query)?;
+        self.get_url(credential, url)
+    }
+
+    fn get_app(
+        &self,
+        credential: &ComposeSessionCredential,
+        app_id: &str,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        let query = environment
+            .map(|environment| vec![("environment", environment.to_string())])
+            .unwrap_or_default();
+        let url = self.app_url(app_id, &query)?;
+        self.get_url(credential, url)
+    }
+
+    fn versions(
+        &self,
+        credential: &ComposeSessionCredential,
+        app_id: &str,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        let query = environment
+            .map(|environment| vec![("environment", environment.to_string())])
+            .unwrap_or_default();
+        self.get_app_resource(credential, app_id, "versions", &query)
+    }
+
     fn initialize(
         &self,
         credential: &ComposeSessionCredential,
@@ -576,19 +841,120 @@ impl ControlPlaneClient {
         })
     }
 
+    fn rollback(
+        &self,
+        credential: &ComposeSessionCredential,
+        app_id: &str,
+        request: &RollbackRequest<'_>,
+    ) -> Result<Value> {
+        let url = self.app_action_url(app_id, "rollback")?;
+        let path = url.path().to_string();
+        self.authorized_json_request(credential, "POST", &path, |authorization| {
+            self.standard_request(self.client.post(url.clone()), authorization)
+                .json(request)
+                .build()
+                .context("build Apps Platform rollback request")
+        })
+    }
+
+    fn ready(
+        &self,
+        credential: &ComposeSessionCredential,
+        app_id: &str,
+        version_id: &str,
+        environment: Option<&str>,
+    ) -> Result<Value> {
+        let mut query = Vec::new();
+        if let Some(environment) = environment {
+            query.push(("environment", environment.to_string()));
+        }
+        query.push(("version_id", version_id.to_string()));
+        self.get_app_resource(credential, app_id, "ready", &query)
+    }
+
+    fn debug(
+        &self,
+        credential: &ComposeSessionCredential,
+        app_id: &str,
+        environment: Option<&str>,
+        version_id: Option<&str>,
+        tail_lines: Option<u16>,
+    ) -> Result<Value> {
+        let mut query = Vec::new();
+        if let Some(environment) = environment {
+            query.push(("environment", environment.to_string()));
+        }
+        if let Some(version_id) = version_id {
+            query.push(("version_id", version_id.to_string()));
+        }
+        if let Some(tail_lines) = tail_lines {
+            query.push(("tail_lines", tail_lines.to_string()));
+        }
+        self.get_app_resource(credential, app_id, "debug", &query)
+    }
+
+    fn get_app_resource(
+        &self,
+        credential: &ComposeSessionCredential,
+        app_id: &str,
+        resource: &str,
+        query: &[(&str, String)],
+    ) -> Result<Value> {
+        let url = self.app_resource_url(app_id, resource, query)?;
+        self.get_url(credential, url)
+    }
+
+    fn get_url(&self, credential: &ComposeSessionCredential, url: url::Url) -> Result<Value> {
+        let path = request_path(&url);
+        self.authorized_json_request(credential, "GET", &path, |authorization| {
+            self.standard_request(self.client.get(url.clone()), authorization)
+                .build()
+                .with_context(|| format!("build Apps Platform GET {path} request"))
+        })
+    }
+
     fn endpoint(&self, path: &str) -> Result<url::Url> {
         auth_url(&self.base_url, path)
             .with_context(|| format!("build Apps Platform control-plane {path} URL"))
     }
 
     fn app_action_url(&self, app_id: &str, action: &str) -> Result<url::Url> {
+        self.app_resource_url(app_id, action, &[])
+    }
+
+    fn apps_url(&self, query: &[(&str, String)]) -> Result<url::Url> {
         let mut url = self.endpoint("/v1/agent/apps")?;
+        if !query.is_empty() {
+            let mut pairs = url.query_pairs_mut();
+            for (name, value) in query {
+                pairs.append_pair(name, value);
+            }
+        }
+        Ok(url)
+    }
+
+    fn app_url(&self, app_id: &str, query: &[(&str, String)]) -> Result<url::Url> {
+        let mut url = self.apps_url(query)?;
         url.path_segments_mut()
             .map_err(|_| {
                 anyhow::anyhow!("Apps Platform control-plane URL cannot contain path segments")
             })?
-            .push(app_id)
-            .push(action);
+            .push(app_id);
+        Ok(url)
+    }
+
+    fn app_resource_url(
+        &self,
+        app_id: &str,
+        resource: &str,
+        query: &[(&str, String)],
+    ) -> Result<url::Url> {
+        let mut url = self.app_url(app_id, query)?;
+        url.path_segments_mut()
+            .map_err(|_| {
+                anyhow::anyhow!("Apps Platform control-plane URL cannot contain path segments")
+            })?
+            .push(resource);
         Ok(url)
     }
 
@@ -665,6 +1031,13 @@ impl ControlPlaneClient {
             return transport.execute(request);
         }
         self.client.execute(request)
+    }
+}
+
+fn request_path(url: &url::Url) -> String {
+    match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
     }
 }
 
@@ -1104,6 +1477,13 @@ mod tests {
             request.headers.get("authorization").map(String::as_str),
             Some(format!("BBIdentity {credential}").as_str())
         );
+        assert_eq!(
+            request
+                .headers
+                .get("x-hotpod-agent-client-version")
+                .map(String::as_str),
+            Some("0.2.0")
+        );
         for forbidden in [
             "cookie",
             "x-bb-session-credential",
@@ -1177,6 +1557,176 @@ mod tests {
         let control_requests = control_plane.finish();
         assert_process_auth(&auth_requests[0], credential);
         assert_process_control_plane(&control_requests[0], "GET", APPS_CONTRACT_PATH, credential);
+    }
+
+    #[test]
+    fn bb_apps_list_process_sends_filters_and_preserves_inventory() {
+        let credential = "apps-e2e-only.list.session+credential";
+        let inventory = json!({
+            "ok": true,
+            "caller": "apps-user",
+            "scope": "publisher",
+            "captured_at": "2026-09-01T12:00:00Z",
+            "count": 1,
+            "apps": [{
+                "app_id": "merchant-lookup",
+                "role": "publisher",
+                "status": "deleted",
+                "ready": false,
+                "active_version_id": "ver-123",
+                "last_published_by": "apps-user"
+            }]
+        });
+        let auth_server = ProcessServer::start(vec![process_auth_response()]);
+        let control_plane = ProcessServer::start(vec![ProcessResponse::json(inventory.clone())]);
+        let mut command = process_command(
+            &auth_server,
+            &control_plane,
+            &[
+                "apps",
+                "list",
+                "--scope",
+                "publisher",
+                "--include-deleted",
+                "--base-url",
+                APPROVED_TEST_BASE_URL,
+                "--client-version",
+                "0.2.0",
+                "--json",
+            ],
+            credential,
+        );
+
+        let output = command.output().expect("run Apps list process command");
+        assert!(
+            output.status.success(),
+            "stderr was: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&process_stdout(&output))
+                .expect("parse list process output"),
+            inventory
+        );
+        let auth_requests = auth_server.finish();
+        let requests = control_plane.finish();
+        assert_process_auth(&auth_requests[0], credential);
+        assert_eq!(requests.len(), 1);
+        assert_process_control_plane(
+            &requests[0],
+            "GET",
+            "/v1/agent/apps?scope=publisher&include_deleted=true",
+            credential,
+        );
+        assert_eq!(requests[0].body, Value::Null);
+    }
+
+    #[test]
+    fn bb_apps_get_process_encodes_app_id_and_preserves_versions() {
+        let credential = "apps-e2e-only.get.session+credential";
+        let app = json!({
+            "ok": true,
+            "app": {
+                "app_id": "merchant/lookup app",
+                "environment": "staging",
+                "role": "owner",
+                "ready": true,
+                "route_revision": 9
+            },
+            "versions": [{
+                "version_id": "ver-123",
+                "deployment_id": "dpl-123",
+                "active": true
+            }]
+        });
+        let auth_server = ProcessServer::start(vec![process_auth_response()]);
+        let control_plane = ProcessServer::start(vec![ProcessResponse::json(app.clone())]);
+        let mut command = process_command(
+            &auth_server,
+            &control_plane,
+            &[
+                "apps",
+                "get",
+                "merchant/lookup app",
+                "--environment",
+                "staging",
+                "--base-url",
+                APPROVED_TEST_BASE_URL,
+                "--client-version",
+                "0.2.0",
+                "--json",
+            ],
+            credential,
+        );
+
+        let output = command.output().expect("run Apps get process command");
+        assert!(output.status.success());
+        assert_eq!(
+            serde_json::from_str::<Value>(&process_stdout(&output))
+                .expect("parse get process output"),
+            app
+        );
+        let auth_requests = auth_server.finish();
+        let requests = control_plane.finish();
+        assert_process_auth(&auth_requests[0], credential);
+        assert_process_control_plane(
+            &requests[0],
+            "GET",
+            "/v1/agent/apps/merchant%2Flookup%20app?environment=staging",
+            credential,
+        );
+    }
+
+    #[test]
+    fn bb_apps_versions_process_preserves_rollback_candidates() {
+        let credential = "apps-e2e-only.versions.session+credential";
+        let versions = json!({
+            "ok": true,
+            "app_id": "merchant-lookup",
+            "environment": "staging",
+            "active_version_id": "ver-123",
+            "count": 2,
+            "versions": [
+                {"version_id": "ver-123", "route_revision": 9, "active": true},
+                {"version_id": "ver-122", "route_revision": 8, "active": false}
+            ]
+        });
+        let auth_server = ProcessServer::start(vec![process_auth_response()]);
+        let control_plane = ProcessServer::start(vec![ProcessResponse::json(versions.clone())]);
+        let mut command = process_command(
+            &auth_server,
+            &control_plane,
+            &[
+                "apps",
+                "versions",
+                "merchant-lookup",
+                "--environment",
+                "staging",
+                "--base-url",
+                APPROVED_TEST_BASE_URL,
+                "--client-version",
+                "0.2.0",
+                "--json",
+            ],
+            credential,
+        );
+
+        let output = command.output().expect("run Apps versions process command");
+        assert!(output.status.success());
+        assert_eq!(
+            serde_json::from_str::<Value>(&process_stdout(&output))
+                .expect("parse versions process output"),
+            versions
+        );
+        let auth_requests = auth_server.finish();
+        let requests = control_plane.finish();
+        assert_process_auth(&auth_requests[0], credential);
+        assert_process_control_plane(
+            &requests[0],
+            "GET",
+            "/v1/agent/apps/merchant-lookup/versions?environment=staging",
+            credential,
+        );
     }
 
     #[test]
@@ -1365,6 +1915,215 @@ mod tests {
         ] {
             assert!(body.contains(expected), "multipart omitted {expected:?}");
         }
+    }
+
+    #[test]
+    fn bb_apps_rollback_process_sends_target_and_preserves_readiness() {
+        let credential = "apps-e2e-only.rollback.session+credential";
+        let rollback = json!({
+            "ok": true,
+            "app_id": "merchant/lookup app",
+            "environment": "staging/west",
+            "version_id": "ver/122?stable=true",
+            "previous_version_id": "ver-123",
+            "deployment_id": "dpl-122",
+            "route_revision": 10,
+            "external_url": "https://merchant-lookup--bpsites.example/",
+            "readiness": {
+                "control_plane_url": "/v1/agent/apps/merchant-lookup/ready?environment=staging&version_id=ver-122",
+                "diagnostics_url": "/v1/agent/apps/merchant-lookup/debug?environment=staging&version_id=ver-122"
+            },
+            "next_api_calls": [{
+                "method": "GET",
+                "path": "/v1/agent/apps/merchant-lookup/ready?environment=staging&version_id=ver-122",
+                "when": "poll until ready is true"
+            }]
+        });
+        let auth_server = ProcessServer::start(vec![process_auth_response()]);
+        let control_plane = ProcessServer::start(vec![ProcessResponse::json(rollback.clone())]);
+        let mut command = process_command(
+            &auth_server,
+            &control_plane,
+            &[
+                "apps",
+                "rollback",
+                "merchant/lookup app",
+                "--environment",
+                "staging/west",
+                "--version-id",
+                "ver/122?stable=true",
+                "--base-url",
+                APPROVED_TEST_BASE_URL,
+                "--client-version",
+                "0.2.0",
+                "--json",
+            ],
+            credential,
+        );
+
+        let output = command.output().expect("run Apps rollback process command");
+        assert!(
+            output.status.success(),
+            "stderr was: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&process_stdout(&output))
+                .expect("parse rollback process output"),
+            rollback
+        );
+        let auth_requests = auth_server.finish();
+        let requests = control_plane.finish();
+        assert_process_auth(&auth_requests[0], credential);
+        assert_eq!(requests.len(), 1);
+        assert_process_control_plane(
+            &requests[0],
+            "POST",
+            "/v1/agent/apps/merchant%2Flookup%20app/rollback",
+            credential,
+        );
+        assert_eq!(
+            requests[0].body,
+            json!({
+                "environment": "staging/west",
+                "version_id": "ver/122?stable=true"
+            })
+        );
+    }
+
+    #[test]
+    fn bb_apps_ready_process_requests_exact_version_and_preserves_response() {
+        let credential = "apps-e2e-only.ready.session+credential";
+        let ready = json!({
+            "ok": true,
+            "app_id": "merchant-lookup",
+            "version_id": "ver/123?route=active",
+            "ready": false,
+            "status": "runner_unavailable",
+            "active_version_id": "ver/123?route=active",
+            "route_revision": 8,
+            "readiness": {
+                "control_plane_url": "/v1/agent/apps/merchant-lookup/ready?version_id=ver-123",
+                "diagnostics_url": "/v1/agent/apps/merchant-lookup/debug?version_id=ver-123"
+            },
+            "runner_readiness": {
+                "http_status": 503,
+                "error": {"code": "runner_readiness_unreachable"}
+            },
+            "next_action": "Call the diagnostics endpoint."
+        });
+        let auth_server = ProcessServer::start(vec![process_auth_response()]);
+        let control_plane = ProcessServer::start(vec![ProcessResponse::json(ready.clone())]);
+        let mut command = process_command(
+            &auth_server,
+            &control_plane,
+            &[
+                "apps",
+                "ready",
+                "merchant/lookup app",
+                "--version-id",
+                "ver/123?route=active",
+                "--environment",
+                "staging/west?cell=1",
+                "--base-url",
+                APPROVED_TEST_BASE_URL,
+                "--client-version",
+                "0.2.0",
+                "--json",
+            ],
+            credential,
+        );
+
+        let output = command.output().expect("run Apps ready process command");
+        assert!(
+            output.status.success(),
+            "stderr was: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&process_stdout(&output))
+                .expect("parse ready process output"),
+            ready
+        );
+        let auth_requests = auth_server.finish();
+        let requests = control_plane.finish();
+        assert_process_auth(&auth_requests[0], credential);
+        assert_eq!(requests.len(), 1);
+        assert_process_control_plane(
+            &requests[0],
+            "GET",
+            "/v1/agent/apps/merchant%2Flookup%20app/ready?environment=staging%2Fwest%3Fcell%3D1&version_id=ver%2F123%3Froute%3Dactive",
+            credential,
+        );
+        assert_eq!(requests[0].body, Value::Null);
+    }
+
+    #[test]
+    fn bb_apps_debug_process_preserves_partial_diagnostics() {
+        let credential = "apps-e2e-only.debug.session+credential";
+        let debug = json!({
+            "ok": true,
+            "complete": false,
+            "status": "incomplete",
+            "app_id": "merchant-lookup",
+            "version_id": "ver-123",
+            "route": {"active_version_id": "ver-122", "version_matches": false},
+            "runner_readiness": {"http_status": 503},
+            "pods": [{
+                "name": "hotpod-runner-abc",
+                "logs": [{"container": "hotpod-runner", "current": "useful log line"}]
+            }],
+            "events": [{"reason": "FailedScheduling", "message": "insufficient cpu"}],
+            "issues": [{"code": "route_version_mismatch", "severity": "warning"}],
+            "collection_errors": [{"source": "deployment", "message": "temporarily unavailable"}],
+            "next_actions": ["Retry the debug request."]
+        });
+        let auth_server = ProcessServer::start(vec![process_auth_response()]);
+        let control_plane = ProcessServer::start(vec![ProcessResponse::json(debug.clone())]);
+        let mut command = process_command(
+            &auth_server,
+            &control_plane,
+            &[
+                "apps",
+                "debug",
+                "merchant-lookup",
+                "--environment",
+                "staging",
+                "--version-id",
+                "ver-123",
+                "--tail-lines",
+                "75",
+                "--base-url",
+                APPROVED_TEST_BASE_URL,
+                "--client-version",
+                "0.2.0",
+                "--json",
+            ],
+            credential,
+        );
+
+        let output = command.output().expect("run Apps debug process command");
+        assert!(
+            output.status.success(),
+            "stderr was: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&process_stdout(&output))
+                .expect("parse debug process output"),
+            debug
+        );
+        let auth_requests = auth_server.finish();
+        let requests = control_plane.finish();
+        assert_process_auth(&auth_requests[0], credential);
+        assert_eq!(requests.len(), 1);
+        assert_process_control_plane(
+            &requests[0],
+            "GET",
+            "/v1/agent/apps/merchant-lookup/debug?environment=staging&version_id=ver-123&tail_lines=75",
+            credential,
+        );
+        assert_eq!(requests[0].body, Value::Null);
     }
 
     fn test_control_plane_client(base_url: &str, timeout: Duration) -> ControlPlaneClient {
@@ -1730,7 +2489,261 @@ mod tests {
     }
 
     #[test]
-    fn app_ids_are_encoded_as_single_path_segments() {
+    fn rollback_supports_previous_and_explicit_version_requests() {
+        let server = Server::http("127.0.0.1:0").expect("bind control-plane server");
+        let base_url = format!("http://{}", server.server_addr());
+        let server_thread = thread::spawn(move || {
+            for (expected_path, expected_body) in [
+                ("/v1/agent/apps/app%2Fwith%20space/rollback", json!({})),
+                (
+                    "/v1/agent/apps/app%2Fwith%20space/rollback",
+                    json!({
+                        "environment": "staging/west?cell=1",
+                        "version_id": "ver/123?stable=true"
+                    }),
+                ),
+            ] {
+                let mut request = server.recv().expect("receive rollback request");
+                assert_eq!(request.method().as_str(), "POST");
+                assert_eq!(request.url(), expected_path);
+                let mut body = String::new();
+                request
+                    .as_reader()
+                    .read_to_string(&mut body)
+                    .expect("read rollback request body");
+                assert_eq!(
+                    serde_json::from_str::<Value>(&body).expect("parse rollback request body"),
+                    expected_body
+                );
+                request
+                    .respond(
+                        Response::from_string(r#"{"ok":true}"#).with_header(
+                            Header::from_bytes("Content-Type", "application/json")
+                                .expect("build content type"),
+                        ),
+                    )
+                    .expect("respond to rollback request");
+            }
+        });
+        let client = test_control_plane_client(&base_url, Duration::from_secs(2));
+        let credential = test_credential("rollback_session_credential_123456");
+
+        for request in [
+            RollbackRequest {
+                environment: None,
+                version_id: None,
+            },
+            RollbackRequest {
+                environment: Some("staging/west?cell=1"),
+                version_id: Some("ver/123?stable=true"),
+            },
+        ] {
+            client
+                .rollback(&credential, "app/with space", &request)
+                .expect("request rollback response");
+        }
+
+        server_thread.join().expect("join control-plane server");
+    }
+
+    #[test]
+    fn ready_and_debug_build_each_supported_environment_query_shape() {
+        let server = Server::http("127.0.0.1:0").expect("bind control-plane server");
+        let base_url = format!("http://{}", server.server_addr());
+        let expected_paths = [
+            "/v1/agent/apps/app/ready?version_id=ver-123",
+            "/v1/agent/apps/app/ready?environment=staging%2Fwest%3Fcell%3D1&version_id=ver%2F123%3Factive",
+            "/v1/agent/apps/app/debug",
+            "/v1/agent/apps/app/debug?environment=staging%2Fwest%3Fcell%3D1",
+            "/v1/agent/apps/app/debug?version_id=ver%2F123%3Factive",
+            "/v1/agent/apps/app/debug?tail_lines=25",
+            "/v1/agent/apps/app/debug?environment=staging&version_id=ver-123",
+            "/v1/agent/apps/app/debug?environment=staging&tail_lines=50",
+            "/v1/agent/apps/app/debug?version_id=ver-123&tail_lines=75",
+            "/v1/agent/apps/app/debug?environment=staging&version_id=ver-123&tail_lines=100",
+        ];
+        let server_thread = thread::spawn(move || {
+            for (index, expected_path) in expected_paths.into_iter().enumerate() {
+                let request = server.recv().expect("receive debug request");
+                assert_eq!(request.method().as_str(), "GET");
+                assert_eq!(request.url(), expected_path);
+                request
+                    .respond(
+                        Response::from_string(format!(r#"{{"request":{index}}}"#)).with_header(
+                            Header::from_bytes("Content-Type", "application/json")
+                                .expect("build content type"),
+                        ),
+                    )
+                    .expect("respond to debug request");
+            }
+        });
+        let client = test_control_plane_client(&base_url, Duration::from_secs(2));
+        let credential = test_credential("debug_query_session_credential_123456");
+
+        assert_eq!(
+            client
+                .ready(&credential, "app", "ver-123", None)
+                .expect("request default-environment ready response")["request"],
+            0
+        );
+        assert_eq!(
+            client
+                .ready(
+                    &credential,
+                    "app",
+                    "ver/123?active",
+                    Some("staging/west?cell=1"),
+                )
+                .expect("request explicit-environment ready response")["request"],
+            1
+        );
+
+        for (index, (environment, version_id, tail_lines)) in [
+            (None, None, None),
+            (Some("staging/west?cell=1"), None, None),
+            (None, Some("ver/123?active"), None),
+            (None, None, Some(25)),
+            (Some("staging"), Some("ver-123"), None),
+            (Some("staging"), None, Some(50)),
+            (None, Some("ver-123"), Some(75)),
+            (Some("staging"), Some("ver-123"), Some(100)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = client
+                .debug(&credential, "app", environment, version_id, tail_lines)
+                .expect("request debug response");
+            assert_eq!(response["request"], index + 2);
+        }
+
+        server_thread.join().expect("join control-plane server");
+    }
+
+    #[test]
+    fn list_builds_each_supported_query_shape() {
+        let server = Server::http("127.0.0.1:0").expect("bind control-plane server");
+        let base_url = format!("http://{}", server.server_addr());
+        let expected_paths = [
+            "/v1/agent/apps",
+            "/v1/agent/apps?scope=owned",
+            "/v1/agent/apps?include_deleted=true",
+            "/v1/agent/apps?scope=publisher&include_deleted=true",
+        ];
+        let server_thread = thread::spawn(move || {
+            for (index, expected_path) in expected_paths.into_iter().enumerate() {
+                let request = server.recv().expect("receive list request");
+                assert_eq!(request.method().as_str(), "GET");
+                assert_eq!(request.url(), expected_path);
+                request
+                    .respond(
+                        Response::from_string(format!(r#"{{"request":{index}}}"#)).with_header(
+                            Header::from_bytes("Content-Type", "application/json")
+                                .expect("build content type"),
+                        ),
+                    )
+                    .expect("respond to list request");
+            }
+        });
+        let client = test_control_plane_client(&base_url, Duration::from_secs(2));
+        let credential = test_credential("list_query_session_credential_123456");
+
+        for (index, (scope, include_deleted)) in [
+            (None, false),
+            (Some("owned"), false),
+            (None, true),
+            (Some("publisher"), true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = client
+                .list_apps(&credential, scope, include_deleted)
+                .expect("request list response");
+            assert_eq!(response["request"], index);
+        }
+
+        server_thread.join().expect("join control-plane server");
+    }
+
+    #[test]
+    fn get_and_versions_support_default_and_explicit_environments() {
+        let server = Server::http("127.0.0.1:0").expect("bind control-plane server");
+        let base_url = format!("http://{}", server.server_addr());
+        let expected_paths = [
+            "/v1/agent/apps/app",
+            "/v1/agent/apps/app?environment=staging%2Fwest%3Fcell%3D1",
+            "/v1/agent/apps/app/versions",
+            "/v1/agent/apps/app/versions?environment=staging%2Fwest%3Fcell%3D1",
+        ];
+        let server_thread = thread::spawn(move || {
+            for (index, expected_path) in expected_paths.into_iter().enumerate() {
+                let request = server.recv().expect("receive inspection request");
+                assert_eq!(request.method().as_str(), "GET");
+                assert_eq!(request.url(), expected_path);
+                request
+                    .respond(
+                        Response::from_string(format!(r#"{{"request":{index}}}"#)).with_header(
+                            Header::from_bytes("Content-Type", "application/json")
+                                .expect("build content type"),
+                        ),
+                    )
+                    .expect("respond to inspection request");
+            }
+        });
+        let client = test_control_plane_client(&base_url, Duration::from_secs(2));
+        let credential = test_credential("inspection_environment_session_credential_123456");
+
+        let responses = [
+            client.get_app(&credential, "app", None),
+            client.get_app(&credential, "app", Some("staging/west?cell=1")),
+            client.versions(&credential, "app", None),
+            client.versions(&credential, "app", Some("staging/west?cell=1")),
+        ];
+        for (index, response) in responses.into_iter().enumerate() {
+            assert_eq!(
+                response.expect("request inspection response")["request"],
+                index
+            );
+        }
+
+        server_thread.join().expect("join control-plane server");
+    }
+
+    #[test]
+    fn debug_tail_lines_match_control_plane_bounds() {
+        for invalid in ["0", "1001"] {
+            let error = command()
+                .try_get_matches_from([
+                    "apps",
+                    "debug",
+                    "app",
+                    "--tail-lines",
+                    invalid,
+                    "--base-url",
+                    APPROVED_TEST_BASE_URL,
+                ])
+                .expect_err("reject out-of-range tail lines");
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        }
+
+        for valid in ["1", "1000"] {
+            command()
+                .try_get_matches_from([
+                    "apps",
+                    "debug",
+                    "app",
+                    "--tail-lines",
+                    valid,
+                    "--base-url",
+                    APPROVED_TEST_BASE_URL,
+                ])
+                .expect("accept bounded tail lines");
+        }
+    }
+
+    #[test]
+    fn app_resource_urls_encode_path_segments_and_query_values() {
         let client = test_control_plane_client("http://127.0.0.1:9", Duration::from_secs(2));
 
         let url = client
@@ -1738,5 +2751,22 @@ mod tests {
             .expect("build app deploy URL");
 
         assert_eq!(url.path(), "/v1/agent/apps/app%2F..%2F..%2Fidentity/deploy");
+
+        let app = client
+            .app_url("app/with space", &[])
+            .expect("build app detail URL");
+        assert_eq!(app.path(), "/v1/agent/apps/app%2Fwith%20space");
+
+        let ready = client
+            .app_resource_url(
+                "app/with space",
+                "ready",
+                &[("version_id", "version/?&= value".to_string())],
+            )
+            .expect("build app ready URL");
+        assert_eq!(
+            request_path(&ready),
+            "/v1/agent/apps/app%2Fwith%20space/ready?version_id=version%2F%3F%26%3D+value"
+        );
     }
 }
