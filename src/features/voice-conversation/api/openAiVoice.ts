@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { shareInFlight } from "@/shared/lib/shareInFlight";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { VoiceDeliveryProgress } from "./pocketVoice";
 import type {
@@ -28,9 +29,9 @@ export interface OpenAiVoiceStreamEvent {
   delivery?: VoiceDeliveryProgress | null;
 }
 
-export function getOpenAiVoiceStatus(): Promise<OpenAiVoiceStatus> {
-  return invoke<OpenAiVoiceStatus>("get_openai_voice_status");
-}
+export const getOpenAiVoiceStatus = shareInFlight(
+  (): Promise<OpenAiVoiceStatus> => invoke("get_openai_voice_status"),
+);
 
 export function setOpenAiTtsApiKey(apiKey: string): Promise<void> {
   return invoke("set_openai_tts_api_key", { apiKey });
@@ -55,11 +56,17 @@ export function listenToOpenAiVoiceSettings(
 }
 
 export function startOpenAiVoiceStream(
+  sessionId: string,
+  expectedRevision: number,
+  speechId: number,
   streamId: string,
   interruptionMode: VoiceInterruptionMode,
   interruptionSensitivity: VoiceInterruptionSensitivity,
-): Promise<void> {
-  return invoke("start_openai_voice_stream", {
+): Promise<boolean> {
+  return invoke<boolean>("start_openai_voice_stream", {
+    sessionId,
+    expectedRevision,
+    speechId,
     streamId,
     interruptionMode,
     interruptionSensitivity,
