@@ -6,7 +6,7 @@ use std::fs;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -29,6 +29,7 @@ use super::pocket_voice::{
     effective_output_device_name, output_device_uses_speakers, playback_latency_safety_duration,
     resolve_input_during_tts_policy, selected_output_device,
 };
+use crate::services::atomic_file::write_bytes_atomically;
 #[cfg(target_os = "macos")]
 use berd_voice::input::InputDuringTtsPolicy;
 #[cfg(target_os = "macos")]
@@ -45,7 +46,8 @@ use berd_voice::DeliverySegment as VoiceDeliverySegment;
 #[cfg(target_os = "macos")]
 use berd_voice::{
     ConfiguredTtsSlot, DrainPolicy, OutboundFailure, OutboundOutcome, OutboundPlayback,
-    PcmAudioOutput, PocketAudioPlayer, TtsBackend, TtsConfiguration,
+    PcmAudioOutput, PocketAudioPlayer, StreamingTextChunk, StreamingTtsText, TtsBackend,
+    TtsConfiguration,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -136,10 +138,18 @@ const SIRI_STREAM_EVENT: &str = "siri-voice:stream-event";
 const SIRI_OUTPUT_DRAIN_MARGIN: Duration = Duration::from_secs(60);
 #[cfg(target_os = "macos")]
 const PLAYBACK_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(any(test, target_os = "macos"))]
+// Separate Siri synthesis requests lose part of the natural paragraph pause,
+// so add the measured deficit rather than treating existing PCM as the target.
+const SIRI_INTER_PARAGRAPH_BASE_SILENCE: Duration = Duration::from_millis(250);
 const MIN_PLAYBACK_SPEED: f32 = 0.5;
 const MAX_PLAYBACK_SPEED: f32 = 2.0;
-static SIRI_SETTINGS_LOCK: Mutex<()> = Mutex::new(());
-static SIRI_SETTINGS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+pub(crate) static SIRI_SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(any(test, target_os = "macos"))]
+fn siri_inter_paragraph_silence(speed: f32) -> Duration {
+    SIRI_INTER_PARAGRAPH_BASE_SILENCE.div_f32(speed.clamp(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED))
+}
 
 pub type SiriVoiceSelection = SiriVoiceIdentity;
 
@@ -156,7 +166,7 @@ pub struct SiriVoiceStatus {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SiriVoiceSettings {
+pub(crate) struct SiriVoiceSettings {
     selected_voice: Option<SiriVoiceSelection>,
     #[serde(default = "default_playback_speed")]
     playback_speed: f32,
@@ -175,37 +185,29 @@ impl Default for SiriVoiceSettings {
     }
 }
 
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map(|path| path.join("siri-tts").join("settings.json"))
         .map_err(|error| format!("resolve Siri TTS settings directory: {error}"))
 }
 
-fn read_settings(path: &Path) -> SiriVoiceSettings {
+pub(crate) fn read_settings(path: &Path) -> SiriVoiceSettings {
     fs::read(path)
         .ok()
         .and_then(|data| serde_json::from_slice(&data).ok())
         .unwrap_or_default()
 }
 
-fn write_settings(path: &Path, settings: &SiriVoiceSettings) -> Result<(), String> {
+pub(crate) fn write_settings(path: &Path, settings: &SiriVoiceSettings) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Siri TTS settings path has no parent".to_string())?;
     fs::create_dir_all(parent).map_err(|error| format!("create Siri TTS settings: {error}"))?;
     let data = serde_json::to_vec_pretty(settings)
         .map_err(|error| format!("encode Siri TTS settings: {error}"))?;
-    let temporary = path.with_extension(format!(
-        "json.{}.{}.tmp",
-        std::process::id(),
-        SIRI_SETTINGS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
-    ));
-    fs::write(&temporary, data).map_err(|error| format!("write Siri TTS settings: {error}"))?;
-    fs::rename(&temporary, path).map_err(|error| {
-        let _ = fs::remove_file(&temporary);
-        format!("publish Siri TTS settings: {error}")
-    })
+    write_bytes_atomically(path, &data)
+        .map_err(|error| format!("publish Siri TTS settings: {error}"))
 }
 
 fn update_settings(
@@ -220,6 +222,14 @@ fn update_settings(
         write_settings(path, &settings)?;
     }
     Ok(settings)
+}
+
+fn reset_settings(path: &Path) -> Result<(), String> {
+    update_settings(path, |settings| {
+        *settings = SiriVoiceSettings::default();
+        true
+    })
+    .map(|_| ())
 }
 
 #[cfg(target_os = "macos")]
@@ -487,6 +497,11 @@ pub fn set_siri_playback_speed(app: AppHandle, speed: f32) -> Result<(), String>
 }
 
 #[tauri::command]
+pub fn reset_siri_voice_settings(app: AppHandle) -> Result<(), String> {
+    reset_settings(&settings_path(&app)?)
+}
+
+#[tauri::command]
 pub async fn download_siri_voice(app: AppHandle, voice: SiriVoiceSelection) -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     {
@@ -517,8 +532,8 @@ fn synthesize_siri_stream_ready(
     playback: &mut OutboundPlayback<'_>,
     player: &PocketAudioPlayer,
     output_latency_grace: Duration,
-    pending: &mut String,
-    first_chunk_pending: &mut bool,
+    inter_paragraph_silence: Duration,
+    ready: Vec<StreamingTextChunk>,
     native_voice: &NativeVoiceState,
     interruption_sensitivity: InterruptionSensitivity,
     input_during_tts: InputDuringTtsPolicy,
@@ -526,12 +541,16 @@ fn synthesize_siri_stream_ready(
     playback_drained_at: &mut Option<Instant>,
     last_progress_emit: &mut Instant,
     last_progress: &mut Option<VoiceDeliveryProgress>,
-    flush: bool,
 ) -> Result<bool, String> {
-    let split = berd_voice::take_streaming_text_chunks(pending, *first_chunk_pending, flush)?;
-    *pending = split.pending;
-    *first_chunk_pending = split.first_chunk_pending;
-    for text in split.ready {
+    for chunk in ready {
+        if chunk.starts_speech_block
+            && playback
+                .queue_inter_segment_silence(inter_paragraph_silence)
+                .map_err(|failure| failure.message)?
+                == OutboundOutcome::Interrupted
+        {
+            return Ok(false);
+        }
         // The coordinator invokes these callbacks serially, but Rust cannot
         // infer that two callback values never overlap. Interior borrows keep
         // the single host-owned guard state shared without duplicating it.
@@ -540,7 +559,7 @@ fn synthesize_siri_stream_ready(
         let outcome = playback
             .synthesize_segment(
                 backend,
-                text.trim(),
+                chunk.text.trim(),
                 &mut |_| {
                     let mut assistant_speech = assistant_speech_cell.borrow_mut();
                     if assistant_speech.is_none() {
@@ -660,8 +679,8 @@ fn run_siri_stream(
     let player =
         PocketAudioPlayer::new(pcm_spec.sample_rate, pcm_spec.playback_rate, output_device)?;
     let mut playback = OutboundPlayback::new(&player, &active, pcm_spec.sample_rate, 0)?;
-    let mut pending = String::new();
-    let mut first_chunk_pending = true;
+    let inter_paragraph_silence = siri_inter_paragraph_silence(speed);
+    let mut streaming_text = StreamingTtsText::default();
     let mut assistant_speech = None::<AssistantSpeechGuard>;
     let mut playback_drained_at = None;
     let mut last_progress_emit = Instant::now();
@@ -684,7 +703,7 @@ fn run_siri_stream(
         let command = receiver.recv_timeout(Duration::from_millis(10));
         match command {
             Ok(SiriStreamCommand::Append(text)) => {
-                pending.push_str(&text);
+                let ready = streaming_text.append(backend.as_ref(), &text)?;
                 if !synthesize_siri_stream_ready(
                     &app,
                     &stream_id,
@@ -692,8 +711,8 @@ fn run_siri_stream(
                     &mut playback,
                     &player,
                     output_latency_grace,
-                    &mut pending,
-                    &mut first_chunk_pending,
+                    inter_paragraph_silence,
+                    ready,
                     &native_voice,
                     interruption_sensitivity,
                     input_during_tts,
@@ -701,7 +720,6 @@ fn run_siri_stream(
                     &mut playback_drained_at,
                     &mut last_progress_emit,
                     &mut last_progress,
-                    false,
                 )? {
                     return Ok(SiriStreamOutcome {
                         state: SiriStreamEventState::Interrupted,
@@ -710,6 +728,7 @@ fn run_siri_stream(
                 }
             }
             Ok(SiriStreamCommand::Flush) => {
+                let ready = streaming_text.flush(backend.as_ref())?;
                 if !synthesize_siri_stream_ready(
                     &app,
                     &stream_id,
@@ -717,8 +736,8 @@ fn run_siri_stream(
                     &mut playback,
                     &player,
                     output_latency_grace,
-                    &mut pending,
-                    &mut first_chunk_pending,
+                    inter_paragraph_silence,
+                    ready,
                     &native_voice,
                     interruption_sensitivity,
                     input_during_tts,
@@ -726,7 +745,6 @@ fn run_siri_stream(
                     &mut playback_drained_at,
                     &mut last_progress_emit,
                     &mut last_progress,
-                    true,
                 )? {
                     return Ok(SiriStreamOutcome {
                         state: SiriStreamEventState::Interrupted,
@@ -735,6 +753,7 @@ fn run_siri_stream(
                 }
             }
             Ok(SiriStreamCommand::Finish) => {
+                let ready = streaming_text.flush(backend.as_ref())?;
                 if !synthesize_siri_stream_ready(
                     &app,
                     &stream_id,
@@ -742,8 +761,8 @@ fn run_siri_stream(
                     &mut playback,
                     &player,
                     output_latency_grace,
-                    &mut pending,
-                    &mut first_chunk_pending,
+                    inter_paragraph_silence,
+                    ready,
                     &native_voice,
                     interruption_sensitivity,
                     input_during_tts,
@@ -751,7 +770,6 @@ fn run_siri_stream(
                     &mut playback_drained_at,
                     &mut last_progress_emit,
                     &mut last_progress,
-                    true,
                 )? {
                     return Ok(SiriStreamOutcome {
                         state: SiriStreamEventState::Interrupted,
@@ -1151,6 +1169,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inter_paragraph_silence_tracks_siri_synthesis_rate() {
+        assert_eq!(
+            siri_inter_paragraph_silence(0.5),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            siri_inter_paragraph_silence(1.0),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            siri_inter_paragraph_silence(2.0),
+            Duration::from_millis(125)
+        );
+    }
+
+    #[test]
     fn voice_lookup_normalizes_language_but_preserves_exact_name() {
         let voices = vec![SiriVoice {
             name: "Aaron".to_string(),
@@ -1176,6 +1210,26 @@ mod tests {
             read_settings(&directory.path().join("missing.json")).selected_voice,
             None
         );
+    }
+
+    #[test]
+    fn reset_settings_restores_default_voice_and_speed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("settings.json");
+        write_settings(
+            &path,
+            &SiriVoiceSettings {
+                selected_voice: Some(SiriVoiceSelection::new("Aaron", "en-US").unwrap()),
+                playback_speed: 1.5,
+            },
+        )
+        .expect("write custom settings");
+
+        reset_settings(&path).expect("reset settings");
+
+        let settings = read_settings(&path);
+        assert_eq!(settings.selected_voice, None);
+        assert_eq!(settings.playback_speed, 1.0);
     }
 
     #[test]

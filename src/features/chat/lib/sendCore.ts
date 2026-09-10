@@ -215,7 +215,7 @@ async function recoverMissingMasterTranscript(
   }
 }
 
-async function settleMasterTranscriptDelivery(
+async function settlePromptTranscriptDelivery(
   sessionId: string,
 ): Promise<void> {
   if (useChatStore.getState().loadingSessionIds.has(sessionId)) {
@@ -229,7 +229,7 @@ async function settleMasterTranscriptDelivery(
   }
   // ACP may resolve session/prompt immediately before dispatching the final
   // session/update already read from the same transport. Yield one macrotask
-  // so transcript recovery sees that last visible text block.
+  // so completion observers and transcript recovery see that last text block.
   // Keep ownership through new-session hydration as well: a late live chunk
   // routed after ownership is released looks like replay and can be discarded
   // by the hydration snapshot that is finishing at the same boundary.
@@ -313,6 +313,13 @@ export function resolveAssistantCancellation(
   if (!race) return;
   race.cancellationResult = cancelled;
   finalizeAssistantCancellationRace(promptOwner);
+}
+
+/** Restore an archived chat and require durable success before sending. */
+export async function restoreArchivedSessionBeforeSend(
+  sessionId: string,
+): Promise<void> {
+  await useChatSessionStore.getState().ensureSessionActive(sessionId);
 }
 
 /**
@@ -414,6 +421,11 @@ export async function dispatchPrompt(
     }
   };
 
+  const finishPromptAfterTranscriptSettles = async () => {
+    await settlePromptTranscriptDelivery(sessionId);
+    finishPromptSuccessfully();
+  };
+
   const completeRealtimeTurnIfActive = async (prompt: string) => {
     const shouldCoordinateAtCompletion =
       shouldCoordinateRealtime ||
@@ -425,7 +437,6 @@ export async function dispatchPrompt(
     ) {
       return;
     }
-    await settleMasterTranscriptDelivery(sessionId);
     if (
       assistantTextBeforeTurn &&
       !finalMasterTextSince(sessionId, assistantTextBeforeTurn)
@@ -444,6 +455,10 @@ export async function dispatchPrompt(
     throwIfAborted(signal);
     await prepare?.();
     throwIfAborted(signal);
+
+    await restoreArchivedSessionBeforeSend(sessionId);
+    throwIfAborted(signal);
+    useChatSessionStore.getState().assertSessionActive(sessionId);
 
     const commitUserMessage = () => {
       throwIfAborted(signal);
@@ -538,7 +553,10 @@ export async function dispatchPrompt(
       images: images?.map(
         (img) => [img.base64, img.mimeType] as [string, string],
       ),
-      onPromptDispatching: commitUserMessage,
+      onPromptDispatching: () => {
+        useChatSessionStore.getState().assertSessionActive(sessionId);
+        commitUserMessage();
+      },
       onPromptDispatched: () => {
         onPromptDispatched?.();
       },
@@ -550,7 +568,7 @@ export async function dispatchPrompt(
       );
     }
 
-    finishPromptSuccessfully();
+    await finishPromptAfterTranscriptSettles();
     try {
       await completeRealtimeTurnIfActive(acpPrompt);
     } catch (error) {
@@ -562,7 +580,7 @@ export async function dispatchPrompt(
       userMessageMetadata?.origin === "voice_conversation" &&
       isVoiceConversationEmptyResponse(formatAcpErrorMessage(err));
     if (isVoiceConversationNoop) {
-      finishPromptSuccessfully();
+      await finishPromptAfterTranscriptSettles();
       try {
         await completeRealtimeTurnIfActive(dispatchedPrompt);
       } catch (error) {

@@ -69,6 +69,7 @@ const mocks = vi.hoisted(() => ({
   openAiFinish: vi.fn<(streamId: string) => Promise<void>>(),
   openAiStop: vi.fn<() => Promise<boolean>>(),
   openAiStreamHandler: null as ((event: PocketVoiceStreamEvent) => void) | null,
+  trackAssistantResponse: vi.fn(),
 }));
 vi.mock("../api/voiceConversation", () => ({
   setVoiceConversationAssistantSpeaking: mocks.setAssistantSpeaking,
@@ -150,6 +151,10 @@ vi.mock("../api/siriVoice", () => ({
     mocks.siriStreamHandler = handler;
     return vi.fn();
   },
+}));
+
+vi.mock("./voiceTelemetry", () => ({
+  trackVoiceAssistantResponse: mocks.trackAssistantResponse,
 }));
 
 vi.mock("./voiceOutputPreference", () => ({
@@ -735,6 +740,30 @@ describe("native assistant speech stream", () => {
     expect(
       useChatStore.getState().messagesBySession["session-1"]?.[0]?.content[0],
     ).toMatchObject({ speech: { status: "spoken" } });
+  });
+
+  it("does not flush the first text chunk when a tool preceded it", async () => {
+    startNativeAssistantSpeech("session-1", vi.fn());
+    const toolRequest = {
+      type: "toolRequest" as const,
+      id: "tool-1",
+      name: "todo_write",
+      arguments: {},
+      status: "completed" as const,
+    };
+    useChatStore
+      .getState()
+      .setMessages("session-1", [assistant([toolRequest])]);
+    useChatStore
+      .getState()
+      .setMessages("session-1", [
+        assistant([toolRequest, { type: "text", text: "Mara" }]),
+      ]);
+
+    await vi.waitFor(() =>
+      expect(mocks.append).toHaveBeenCalledWith(expect.any(String), "Mara"),
+    );
+    expect(mocks.flush).not.toHaveBeenCalled();
   });
 
   it("serializes terminal idle behind the speaking activity report", async () => {
@@ -2770,6 +2799,7 @@ describe("native assistant speech stream", () => {
       ]);
       await vi.runAllTimersAsync();
       const firstStreamId = mocks.start.mock.calls[0]?.[0] as string;
+      const responseCount = mocks.trackAssistantResponse.mock.calls.length;
       mocks.streamHandler?.({
         streamId: firstStreamId,
         state: "started",
@@ -2811,6 +2841,7 @@ describe("native assistant speech stream", () => {
         state: "started",
         error: null,
       });
+      expect(mocks.trackAssistantResponse).toHaveBeenCalledTimes(responseCount);
       useVoiceConversationStore.setState({ userSpeaking: true });
       mocks.streamHandler?.({
         streamId: secondStreamId,
