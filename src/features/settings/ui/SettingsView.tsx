@@ -49,7 +49,6 @@ export function SettingsView({
   authStatus,
   onLoggedOut,
   onStartTroubleshootingChat,
-  onStartConnectionSetupChat,
   onReturnToAgentDraft,
 }: SettingsViewProps) {
   const queryClient = useQueryClient();
@@ -77,9 +76,7 @@ export function SettingsView({
     <SettingsPane>
       {activeSection === "appearance" && <AppearanceSettings />}
       {activeSection === "behavior" && <BehaviorSettings />}
-      {activeSection === "connections" && (
-        <ConnectionsSettings onAskAgentToAddMcp={onStartConnectionSetupChat} />
-      )}
+      {activeSection === "connections" && <ConnectionsSettings />}
       {activeSection === "providers" && (
         <ProvidersSettings
           onStartTroubleshootingChat={onStartTroubleshootingChat}

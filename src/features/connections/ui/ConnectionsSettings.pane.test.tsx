@@ -79,6 +79,17 @@ vi.mock("@/features/connections/api/connections", () => ({
   disconnectConnection: async () => {},
 }));
 
+vi.mock("@/features/extensions/api/extensions", () => ({
+  listExtensions: async () => [],
+  addExtension: vi.fn(),
+  removeExtension: vi.fn(),
+  toggleExtension: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn() },
+}));
+
 vi.mock("@/features/connections/api/localMcpInventory", () => ({
   LOCAL_MCP_INVENTORY_QUERY_KEY: ["local-mcp-inventory"],
   listLocalMcpInventory: async (workspacePaths: string[]) => {
@@ -109,15 +120,13 @@ vi.mock("@/features/connections/api/localMcpInventory", () => ({
   },
 }));
 
-function renderConnectionsSettings(
-  onAskAgentToAddMcp?: (request: { title: string; prompt: string }) => void,
-) {
+function renderConnectionsSettings() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <ConnectionsSettings onAskAgentToAddMcp={onAskAgentToAddMcp} />
+      <ConnectionsSettings />
     </QueryClientProvider>,
   );
   return { ...view, client };
@@ -175,7 +184,7 @@ describe("ConnectionsSettings", () => {
 
   it("distinguishes successful empty inventory from failure", async () => {
     testState.inventoryMode = "empty";
-    const empty = renderConnectionsSettings(vi.fn());
+    const empty = renderConnectionsSettings();
     expect(
       await screen.findByText("connections.empty.title"),
     ).toBeInTheDocument();
@@ -185,7 +194,7 @@ describe("ConnectionsSettings", () => {
     empty.unmount();
 
     testState.inventoryMode = "error";
-    renderConnectionsSettings(vi.fn());
+    renderConnectionsSettings();
     expect(
       await screen.findByText("connections.localError.title"),
     ).toBeInTheDocument();
@@ -228,17 +237,19 @@ describe("ConnectionsSettings", () => {
     );
   });
 
-  it("starts Add connection through the neutral setup request", async () => {
-    const onAdd = vi.fn();
+  it("opens the MCP extension form from Add connection", async () => {
     const user = userEvent.setup();
-    renderConnectionsSettings(onAdd);
+    renderConnectionsSettings();
+    await screen.findByText("GitHub");
     await user.click(
       screen.getByRole("button", { name: "connections.askAgent" }),
     );
-    expect(onAdd).toHaveBeenCalledWith({
-      title: "connections.askAgentTitle",
-      prompt: "connections.askAgentPrompt",
-    });
+    expect(
+      await screen.findByRole("dialog", { name: "extensions.addExtension" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("extensions.fields.name"),
+    ).toBeInTheDocument();
   });
 
   it("renders no page wrapper so the caller owns the settings pane", () => {
