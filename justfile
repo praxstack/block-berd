@@ -88,6 +88,10 @@ setup: _setup-dev-deps
 
 # ── Build & Check ────────────────────────────────────────────
 
+# Verify .agents/skills SKILL.md files match skills-lock.json hashes.
+verify-skills-lock:
+    ./scripts/verify-skills-lock.sh
+
 # Run the frontend non-test checks: design-system guardrails, berdctl contract freshness, formatting, lint, i18n, and TypeScript.
 check: design-system-check berdctl-contract-check frontend-fmt-check lint i18n-check typecheck
 

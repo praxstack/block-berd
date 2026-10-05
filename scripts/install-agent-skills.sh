@@ -4,6 +4,10 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+if [[ "${1:-}" == "--verify-only" ]]; then
+  exec "$repo_root/scripts/verify-skills-lock.sh"
+fi
+
 # Tier: core (default) | extended | all | praxstack
 #   core      — layered pipeline packs (default Berd stack)
 #   extended  — core + S-tier additions + PraxStack skills-and-personas
@@ -196,3 +200,5 @@ fi
 
 echo "Installed skills:"
 ls -1 "$repo_root/.agents/skills" | wc -l
+
+"$repo_root/scripts/verify-skills-lock.sh"
