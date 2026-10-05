@@ -4,6 +4,9 @@
 # ~/.claude/skills/gstack/bin/* at runtime.
 set -euo pipefail
 
+export GIT_TERMINAL_PROMPT=0
+export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+
 readonly GSTACK_REPO="${GSTACK_REPO:-https://github.com/garrytan/gstack.git}"
 readonly GSTACK_HOME="${GSTACK_HOME:-$HOME/.claude/skills/gstack}"
 readonly GSTACK_HOST="${GSTACK_HOST:-cursor}"
@@ -23,12 +26,17 @@ while [ $# -gt 0 ]; do
 done
 
 ensure_bun() {
-  if command -v bun >/dev/null 2>&1; then
-    return 0
+  export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+  export PATH="${BUN_INSTALL}/bin:${PATH}"
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "Installing Bun (required by gstack setup) …"
+    curl -fsSL https://bun.sh/install | bash
+    export PATH="${BUN_INSTALL}/bin:${PATH}"
   fi
-  echo "Installing Bun (required by gstack setup) …"
-  curl -fsSL https://bun.sh/install | bash
-  export PATH="$HOME/.bun/bin:$PATH"
+  if [[ -x "${BUN_INSTALL}/bin/bun" ]] && command -v sudo >/dev/null 2>&1; then
+    # Login shells used by Cloud Agent install/start skip ~/.bashrc PATH hooks.
+    sudo ln -sf "${BUN_INSTALL}/bin/bun" /usr/local/bin/bun || true
+  fi
   if ! command -v bun >/dev/null 2>&1; then
     echo "error: bun install failed — add ~/.bun/bin to PATH and retry" >&2
     exit 1

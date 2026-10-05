@@ -5,6 +5,9 @@
 # Workflows / goals prompts → docs/agents/workflows/praxstack/
 set -euo pipefail
 
+export GIT_TERMINAL_PROMPT=0
+export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
