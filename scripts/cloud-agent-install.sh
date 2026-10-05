@@ -14,6 +14,11 @@ source "$repo_root/bin/activate-hermit"
 
 export PATH="$repo_root/bin:$PATH"
 
+# llama-cpp-sys / Goose must use GNU g++, not clang-as-c++ (missing <cstdlib>
+# when cc-rs passes --target=x86_64-unknown-linux-gnu).
+export CC="${CC:-/usr/bin/gcc}"
+export CXX="${CXX:-/usr/bin/g++}"
+
 # Required: pnpm workspace, SDK, pinned Goose backend.
 just _setup-dev-deps
 GOOSE_DEV_MODE=required GOOSE_BUILD_PROFILE=debug ./scripts/ensure-local-goose.sh
