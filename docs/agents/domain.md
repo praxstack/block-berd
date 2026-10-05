@@ -18,8 +18,7 @@ Single-context repo (Berd — Tauri + React monolith, not a pnpm-workspace multi
 /
 ├── CONTEXT.md
 ├── docs/adr/
-│   ├── 0001-event-sourced-orders.md
-│   └── 0002-postgres-for-write-model.md
+│   └── 0001-skill-stack-vendoring.md
 └── src/
 ```
 
