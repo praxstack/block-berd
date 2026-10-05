@@ -7,7 +7,10 @@ export function stripTrailingOpenAiV1(value: string): string {
   return value.trim().replace(OPENAI_V1_SUFFIX, "");
 }
 
-export function normalizeProviderFieldValue(key: string, value: string): string {
+export function normalizeProviderFieldValue(
+  key: string,
+  value: string,
+): string {
   if (HOST_KEYS_WITH_APPENDED_V1.has(key)) {
     return stripTrailingOpenAiV1(value);
   }
