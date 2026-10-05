@@ -15,13 +15,25 @@ source "$repo_root/bin/activate-hermit"
 export PATH="$repo_root/bin:$PATH"
 
 # llama-cpp-sys / Goose must use GNU g++, not clang-as-c++ (missing <cstdlib>
-# when cc-rs passes --target=x86_64-unknown-linux-gnu).
+# when cc-rs passes --target=x86_64-unknown-linux-gnu). Hermit rustc links with
+# rust-lld, which does not search g++'s private libdir for -lstdc++.
 export CC="${CC:-/usr/bin/gcc}"
 export CXX="${CXX:-/usr/bin/g++}"
+if command -v g++ >/dev/null 2>&1; then
+  stdcxx_so="$(g++ -print-file-name=libstdc++.so 2>/dev/null || true)"
+  if [[ -n "$stdcxx_so" && "$stdcxx_so" != "libstdc++.so" ]]; then
+    stdcxx_dir="$(dirname "$stdcxx_so")"
+    export LIBRARY_PATH="${stdcxx_dir}:/usr/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
+    export RUSTFLAGS="-C link-arg=-L${stdcxx_dir} -C link-arg=-L/usr/lib/x86_64-linux-gnu ${RUSTFLAGS:-}"
+  fi
+fi
 
-# Required: pnpm workspace, SDK, pinned Goose backend.
+# Required: pnpm workspace and SDK. Goose is attempted next but must not fail
+# the snapshot if llama.cpp/link is still unhappy on a given image.
 just _setup-dev-deps
-GOOSE_DEV_MODE=required GOOSE_BUILD_PROFILE=debug ./scripts/ensure-local-goose.sh
+if ! GOOSE_DEV_MODE=required GOOSE_BUILD_PROFILE=debug ./scripts/ensure-local-goose.sh; then
+  echo "warning: Goose backend build failed; continuing cloud snapshot. Run just goose-sync later." >&2
+fi
 
 # Optional skill runtimes clone GitHub, install bun, and may pull Playwright.
 # They must never fail a Cloud Agent snapshot. Bound each attempt so a hang
