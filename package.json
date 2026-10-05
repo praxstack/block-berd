@@ -170,5 +170,10 @@
     "typescript": "~5.9.3",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "js-yaml": ">=4.3.1"
+    }
   }
 }
