@@ -11,12 +11,33 @@ small macOS host for default-device capture, playback, and transcript delivery.
 
 ## Command-line interface
 
+On macOS, install [Berd](https://github.com/block/berd/releases) first. Its
+application bundle includes `berd-call`; link that binary into a directory on
+your `PATH` so Berd app updates also update the CLI:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+ln -s "/Applications/Berd.app/Contents/MacOS/berd-call" "$HOME/.local/bin/berd-call"
+```
+
+Make sure `$HOME/.local/bin` is on your `PATH`. If Berd is installed somewhere
+other than `/Applications`, replace the app path above. A standalone binary
+built with Cargo is for development and does not receive Berd app updates.
+When started from Berd's bundle, the CLI asks Berd to check for an update in
+the background. Download can continue during the call; installation waits
+until the call ends. An unavailable update service does not prevent the call.
+
+For a local development binary, run `just install-berd-call-dev` from the Berd
+checkout. This builds the debug CLI, installs a copy at
+`~/.local/libexec/berd-call-dev`, and links `~/.local/bin/berd-call` to it. The
+installer accepts an existing link to Berd's bundled CLI and remembers its exact target, but refuses to overwrite an unrelated command. Run `just uninstall-berd-call-dev` to remove the development copy and restore the original app link, including a custom app location. If there was no original link, it links to a released bundled CLI in `/Applications` when available. Ensure `~/.local/bin` is on your `PATH`.
+
 The standalone command exposes the host-facing runtime protocol plus speech,
 model-management, synthesis, and diagnostic tools. `berd-call start` runs a
 foreground call on macOS using the default input and output devices. Its
-loopback-only control endpoint supports `speak`, `status`, and `stop`; it does
-not add persisted host settings, a menu-bar process, an updater, or a second
-implementation of the shared call runtime.
+loopback-only control endpoint supports `speak`, `status`, and `stop`. The CLI
+uses Berd's updater when it runs from the app bundle; it does not implement a
+second updater or call runtime.
 
 ```text
 berd-call --help
@@ -111,7 +132,12 @@ berd-call session --tts-backend openai --rate 1.0
 berd-call session --tts-backend pocket --model-dir /path/to/native-voice-v2 --voice george --rate 1.0
 berd-call session --stt-backend parakeet --stt-model-dir /path/to/parakeet
 berd-call session --stt-backend openai
+berd-call session --tts-backend openai --mode expert-spokesperson --realtime-url ws://127.0.0.1:18870/v1/realtime
+berd-call session --tts-backend openai --tts-url https://proxy.example/v1/audio/speech
+berd-call session --stt-backend openai --stt-url wss://proxy.example/v1/realtime?intent=transcription
 ```
+
+The three URL flags take full endpoints and override only their matching service for that call. Expert–Spokesperson uses `--realtime-url` for both input and output; `--stt-url` and `--tts-url` apply only to conventional mode. Without an override, each service uses its OpenAI endpoint (or its existing environment override). `OPENAI_API_KEY` supplies the CLI credential; the desktop app stores keys separately by endpoint URL in Keychain.
 
 The default Siri backend still requires an exact installed voice name and
 language. Missing or unavailable Siri voice configuration and an unavailable

@@ -15,17 +15,21 @@ use berd_call::benchmark::{
     load_bundled_tts_prompt_manifest, SttBenchmarkEnvironment, SttBenchmarkMode,
     SttBenchmarkTarget, TtsBenchmarkMode, TtsBenchmarkPromptManifest, TtsBenchmarkTarget,
 };
+use berd_call::endpoint_url::{is_allowed_endpoint_url, EndpointProtocol};
 use berd_call::expert_spokesperson::{ExpertDirectiveOutcome, LiveSideEvent};
 use berd_call::input::{
     AssistantActivityGuard, InputDuringTtsSlot, InputDuringTtsSnapshot, VoiceInputConfig,
     VoiceInputControls, VoiceInputEngineConfig, VoiceInputEvent, VoiceInputFrame,
     VoiceInputRuntime, INPUT_FRAME_SAMPLES,
 };
-use berd_call::openai_realtime_protocol::{
-    expert_handoff_message, expert_transcript_message, RealtimeExpertMessage,
-    RealtimeExpertMessageMode, RealtimeExpertSpokespersonSession, RealtimeHandoffReminder,
-    RealtimeTranscriptSpeaker,
-};
+use berd_call::openai_realtime_protocol::accepted_handoff_tool_output;
+use berd_call::openai_realtime_protocol::expert_handoff_message;
+use berd_call::openai_realtime_protocol::expert_transcript_message;
+use berd_call::openai_realtime_protocol::RealtimeExpertMessage;
+use berd_call::openai_realtime_protocol::RealtimeExpertMessageMode;
+use berd_call::openai_realtime_protocol::RealtimeExpertSpokespersonSession;
+use berd_call::openai_realtime_protocol::RealtimeHandoffReminder;
+use berd_call::openai_realtime_protocol::RealtimeTranscriptSpeaker;
 use berd_call::openai_spokesperson::{
     OpenAiSpokespersonConfig, OpenAiSpokespersonRuntime, SpokespersonCommand, SpokespersonEvent,
     SpokespersonResponseStatus,
@@ -184,6 +188,14 @@ struct SessionConfig {
     tts: TtsBackendConfig,
     stt: SttBackendConfig,
     mode: SessionMode,
+    endpoints: SessionEndpointOverrides,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SessionEndpointOverrides {
+    realtime: Option<String>,
+    tts: Option<String>,
+    stt: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -503,6 +515,8 @@ fn main() {
                 std::process::exit(1);
             }
             #[cfg(target_os = "macos")]
+            let _update_guard = guard_and_request_bundled_app_update();
+            #[cfg(target_os = "macos")]
             if let Err(error) = menu_bar::run(options) {
                 eprintln!("berd-call start failed: {error}");
                 std::process::exit(1);
@@ -640,6 +654,77 @@ fn main() {
         },
         Some(command) => usage_error(&format!("unrecognized command: {command}"), &args),
         None => usage_error("a command is required", &args),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn resolved_executable_path(executable: &Path) -> PathBuf {
+    // Replacement may briefly remove the executable after this process has
+    // started. The symlink target or original path still identifies its bundle.
+    if let Ok(path) = executable.canonicalize() {
+        return path;
+    }
+    match std::fs::read_link(executable) {
+        Ok(target) if target.is_absolute() => target,
+        Ok(target) => executable
+            .parent()
+            .map(|parent| parent.join(target))
+            .unwrap_or_else(|| executable.to_path_buf()),
+        Err(_) => executable.to_path_buf(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn bundled_app_path(executable: &Path) -> Option<PathBuf> {
+    let executable = resolved_executable_path(executable);
+    if executable.file_name()?.to_str()? != "berd-call" {
+        return None;
+    }
+    let macos = executable.parent()?;
+    if macos.file_name()?.to_str()? != "MacOS" {
+        return None;
+    }
+    let contents = macos.parent()?;
+    if contents.file_name()?.to_str()? != "Contents" {
+        return None;
+    }
+    let app = contents.parent()?;
+    (app.file_name()?.to_str()? == "Berd.app").then(|| app.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn guard_and_request_bundled_app_update() -> Option<std::fs::File> {
+    let app_path = std::env::current_exe()
+        .ok()
+        .and_then(|executable| bundled_app_path(&executable))?;
+    let guard = match berd_call::update_guard::hold_call() {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("berd-call could not guard app updates during this call: {error}");
+            return None;
+        }
+    };
+    request_bundled_app_update(&app_path);
+    Some(guard)
+}
+
+#[cfg(target_os = "macos")]
+fn request_bundled_app_update(app_path: &Path) {
+    // `open -g` returns promptly and routes the URL to an already-running app,
+    // or starts this same bundle in the background. Berd owns update trust.
+    match std::process::Command::new("/usr/bin/open")
+        .arg("-g")
+        .arg("-a")
+        .arg(app_path)
+        .arg("berd://update-check")
+        .spawn()
+    {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(error) => eprintln!("berd-call could not request a background app update: {error}"),
     }
 }
 
@@ -800,7 +885,7 @@ fn parse_saved_start_args_at(args: &[String], path: PathBuf) -> Result<StartOpti
             }
         }
     }
-    saved.arguments = options.session_arguments[1..].to_vec();
+    saved.arguments = saved_settings::persistable_arguments(&options.session_arguments[1..]);
     options.saved = Some((path, saved));
     Ok(options)
 }
@@ -2048,7 +2133,7 @@ fn run_session(config: SessionConfig, pcm_output_fd: RawFd) -> Result<(), String
                     abort_active(&active);
                     return Ok(());
                 }
-                let slot = match create_tts_slot(&config.tts) {
+                let slot = match create_tts_slot(&config.tts, config.endpoints.tts.as_deref()) {
                     Ok(slot) => Arc::new(slot),
                     Err(message) => {
                         write_protocol_fatal(
@@ -2059,17 +2144,18 @@ fn run_session(config: SessionConfig, pcm_output_fd: RawFd) -> Result<(), String
                         return Ok(());
                     }
                 };
-                let (runtime, mut events) = match create_input_runtime(&config.stt) {
-                    Ok(runtime) => runtime,
-                    Err(message) => {
-                        write_protocol_fatal(
-                            &mut writer,
-                            &public_stt_startup_error(&config.stt),
-                            &format!("STT startup failed: {message}"),
-                        )?;
-                        return Ok(());
-                    }
-                };
+                let (runtime, mut events) =
+                    match create_input_runtime(&config.stt, config.endpoints.stt.as_deref()) {
+                        Ok(runtime) => runtime,
+                        Err(message) => {
+                            write_protocol_fatal(
+                                &mut writer,
+                                &public_stt_startup_error(&config.stt),
+                                &format!("STT startup failed: {message}"),
+                            )?;
+                            return Ok(());
+                        }
+                    };
                 let readiness = wait_for_input_ready(&mut events, INPUT_STARTUP_TIMEOUT);
                 if let Err(message) = readiness {
                     runtime.cancel();
@@ -3597,11 +3683,23 @@ fn run_expert_spokesperson_session(
                         call_id,
                         message,
                     } => {
-                        record_and_emit_live_event(
+                        let handoff_id = match record_and_emit_live_event(
                             &mut core,
                             &mut emitted_live_token,
-                            LiveSideEvent::Handoff { call_id, message },
+                            LiveSideEvent::Handoff {
+                                call_id: call_id.clone(),
+                                message,
+                            },
                             &mut writer,
+                        )? {
+                            LiveSideEvent::Handoff { call_id, .. } => call_id,
+                            _ => return Err("live handoff did not produce a handoff ID".into()),
+                        };
+                        runtime.as_ref().expect("initialized runtime").send(
+                            SpokespersonCommand::Provider(accepted_handoff_tool_output(
+                                &call_id,
+                                &handoff_id,
+                            )?),
                         )?;
                     }
                     event @ (SpokespersonEvent::Expired(_) | SpokespersonEvent::SessionLost(_)) => {
@@ -4005,6 +4103,9 @@ fn run_expert_spokesperson_session(
                     break;
                 }
                 let mut spokesperson_config = OpenAiSpokespersonConfig::from_environment()?;
+                if let Some(url) = &config.endpoints.realtime {
+                    spokesperson_config.endpoint.clone_from(url);
+                }
                 apply_spokesperson_startup_settings(&config, &mut spokesperson_config)?;
                 let tts = berd_call::TtsConfigurationSnapshot {
                     revision: 1,
@@ -4985,8 +5086,8 @@ fn record_and_emit_live_event(
     emitted_live_token: &mut u64,
     event: LiveSideEvent,
     writer: &mut impl Write,
-) -> Result<(), String> {
-    let (_, expert_delivery) = core.record_live_event_with_delivery(event)?;
+) -> Result<LiveSideEvent, String> {
+    let (recorded, expert_delivery) = core.record_live_event_with_delivery(event)?;
     emit_live_events(core, emitted_live_token, writer)?;
     if let Some(delivery) = expert_delivery {
         write_message(
@@ -4999,7 +5100,7 @@ fn record_and_emit_live_event(
             },
         )?;
     }
-    Ok(())
+    Ok(recorded.payload)
 }
 
 fn publish_live_response_if_complete(
@@ -5229,6 +5330,7 @@ fn parse_args(args: &[String]) -> Result<SessionConfig, ParseFailure> {
     let mut stt_backend = "macos";
     let mut stt_model_dir = None;
     let mut mode = SessionMode::Conventional;
+    let mut endpoints = SessionEndpointOverrides::default();
     let mut index = 2;
     while index < args.len() {
         let flag = args[index].as_str();
@@ -5252,6 +5354,11 @@ fn parse_args(args: &[String]) -> Result<SessionConfig, ParseFailure> {
             }
             "--stt-backend" => stt_backend = value,
             "--stt-model-dir" => stt_model_dir = Some(PathBuf::from(value)),
+            "--realtime-url" => {
+                endpoints.realtime = Some(parse_endpoint_url(value, "--realtime-url", true)?)
+            }
+            "--stt-url" => endpoints.stt = Some(parse_endpoint_url(value, "--stt-url", true)?),
+            "--tts-url" => endpoints.tts = Some(parse_endpoint_url(value, "--tts-url", false)?),
             "--mode" => {
                 mode = match value.as_str() {
                     "conventional" => SessionMode::Conventional,
@@ -5266,7 +5373,39 @@ fn parse_args(args: &[String]) -> Result<SessionConfig, ParseFailure> {
     }
     let tts = build_tts_backend_config(backend, voice, language, model_dir, rate)?;
     let stt = build_stt_backend_config(stt_backend, stt_model_dir)?;
-    Ok(SessionConfig { tts, stt, mode })
+    if endpoints.realtime.is_some() && mode != SessionMode::ExpertSpokesperson {
+        return Err("--realtime-url requires --mode expert-spokesperson".into());
+    }
+    if mode == SessionMode::ExpertSpokesperson
+        && (endpoints.tts.is_some() || endpoints.stt.is_some())
+    {
+        return Err("--tts-url and --stt-url apply only to conventional mode; Expert-Spokesperson uses --realtime-url".into());
+    }
+    if endpoints.tts.is_some() && !matches!(tts, TtsBackendConfig::OpenAi { .. }) {
+        return Err("--tts-url requires --tts-backend openai".into());
+    }
+    if endpoints.stt.is_some() && !matches!(stt, SttBackendConfig::OpenAi) {
+        return Err("--stt-url requires --stt-backend openai".into());
+    }
+    Ok(SessionConfig {
+        tts,
+        stt,
+        mode,
+        endpoints,
+    })
+}
+
+fn parse_endpoint_url(value: &str, flag: &str, websocket: bool) -> Result<String, String> {
+    let url = reqwest::Url::parse(value).map_err(|error| format!("{flag} is invalid: {error}"))?;
+    let protocol = if websocket {
+        EndpointProtocol::WebSocket
+    } else {
+        EndpointProtocol::Http
+    };
+    if !is_allowed_endpoint_url(&url, protocol) {
+        return Err(format!("{flag} requires a full URL with the correct protocol, HTTPS/WSS outside loopback, and no embedded credentials or fragment"));
+    }
+    Ok(url.to_string())
 }
 
 fn parse_pcm_output_fd(args: &[String]) -> Result<RawFd, String> {
@@ -5868,7 +6007,7 @@ fn create_stt_benchmark_report(
         &pack,
         config.runs,
         config.mode,
-        || create_input_runtime(&config.stt),
+        || create_input_runtime(&config.stt, None),
     )))
 }
 
@@ -5937,12 +6076,16 @@ fn stt_benchmark_target(config: &SttBackendConfig) -> Result<SttBenchmarkTarget,
     }
 }
 
-fn create_tts_configuration(config: &TtsBackendConfig) -> Result<TtsConfiguration, String> {
+fn create_tts_configuration(
+    config: &TtsBackendConfig,
+    endpoint: Option<&str>,
+) -> Result<TtsConfiguration, String> {
     match config {
         TtsBackendConfig::OpenAi { rate } => create_openai_tts_configuration(
             *rate,
             std::env::var("OPENAI_TTS_MODEL").unwrap_or_else(|_| "gpt-4o-mini-tts".into()),
             std::env::var("OPENAI_TTS_VOICE").unwrap_or_else(|_| "marin".into()),
+            endpoint,
         ),
         TtsBackendConfig::Siri {
             voice,
@@ -5970,6 +6113,7 @@ fn create_openai_tts_configuration(
     rate: f32,
     model: String,
     voice: String,
+    endpoint: Option<&str>,
 ) -> Result<TtsConfiguration, String> {
     let api_key = std::env::var("OPENAI_API_KEY")
         .ok()
@@ -5978,7 +6122,9 @@ fn create_openai_tts_configuration(
     let base =
         std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".into());
     Ok(TtsConfiguration::openai(
-        format!("{}/audio/speech", base.trim_end_matches('/')),
+        endpoint
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{}/audio/speech", base.trim_end_matches('/'))),
         api_key,
         model,
         voice,
@@ -5986,7 +6132,10 @@ fn create_openai_tts_configuration(
     ))
 }
 
-fn create_tts_slot(config: &TtsBackendConfig) -> Result<ConfiguredTtsSlot, String> {
+fn create_tts_slot(
+    config: &TtsBackendConfig,
+    endpoint: Option<&str>,
+) -> Result<ConfiguredTtsSlot, String> {
     #[cfg(not(target_os = "macos"))]
     if matches!(config, TtsBackendConfig::Siri { .. }) {
         return Err(
@@ -5994,7 +6143,7 @@ fn create_tts_slot(config: &TtsBackendConfig) -> Result<ConfiguredTtsSlot, Strin
                 .into(),
         );
     }
-    ConfiguredTtsSlot::new(create_tts_configuration(config)?).map_err(|error| match config {
+    ConfiguredTtsSlot::new(create_tts_configuration(config, endpoint)?).map_err(|error| match config {
         TtsBackendConfig::Siri {
             voice, language, ..
         } => format!(
@@ -6005,7 +6154,7 @@ fn create_tts_slot(config: &TtsBackendConfig) -> Result<ConfiguredTtsSlot, Strin
 }
 
 fn create_tts_backend(config: &TtsBackendConfig) -> Result<Arc<dyn TtsBackend>, String> {
-    let slot = create_tts_slot(config)?;
+    let slot = create_tts_slot(config, None)?;
     Ok(Arc::clone(slot.lease()?.backend()))
 }
 
@@ -6016,6 +6165,7 @@ fn create_synthesis_backend(config: &SynthesisTtsConfig) -> Result<Arc<dyn TtsBa
                 *rate,
                 model.clone(),
                 voice.clone(),
+                None,
             )?)?;
             Ok(Arc::clone(slot.lease()?.backend()))
         }
@@ -6194,6 +6344,7 @@ fn run_synthesis_command(config: SynthesisConfig) -> Result<(), SynthesisFailure
 
 fn create_input_runtime(
     config: &SttBackendConfig,
+    endpoint_override: Option<&str>,
 ) -> Result<
     (
         VoiceInputRuntime,
@@ -6229,9 +6380,13 @@ fn create_input_runtime(
                 .ok()
                 .filter(|key| !key.trim().is_empty())
                 .ok_or_else(|| "OPENAI_API_KEY is required for OpenAI STT".to_string())?;
-            let endpoint = std::env::var("OPENAI_REALTIME_ENDPOINT")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
+            let endpoint = endpoint_override
+                .map(str::to_string)
+                .or_else(|| {
+                    std::env::var("OPENAI_REALTIME_ENDPOINT")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                })
                 .unwrap_or_else(|| {
                     "wss://api.openai.com/v1/realtime?intent=transcription".to_string()
                 });
@@ -7385,6 +7540,55 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::sync::Mutex;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn update_check_only_targets_the_owning_app_bundle() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = directory.path().join("Berd.app");
+        let bundle = app.join("Contents/MacOS/berd-call");
+        std::fs::create_dir_all(bundle.parent().unwrap()).unwrap();
+        std::fs::write(&bundle, []).unwrap();
+        assert_eq!(bundled_app_path(&bundle), Some(app.canonicalize().unwrap()));
+        assert!(bundled_app_path(Path::new("/tmp/berd-call")).is_none());
+        let other = bundle.with_file_name("other");
+        std::fs::write(&other, []).unwrap();
+        assert!(bundled_app_path(&other).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn update_check_recognizes_a_path_symlink_to_the_bundled_cli() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let app = directory.path().join("Berd.app");
+        let executable = app.join("Contents/MacOS/berd-call");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, []).unwrap();
+        let link = directory.path().join("berd-call");
+        symlink(&executable, &link).unwrap();
+
+        assert_eq!(bundled_app_path(&link), Some(app.canonicalize().unwrap()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn update_lock_still_recognizes_a_bundle_during_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let app = directory.path().join("Berd.app");
+        let executable = app.join("Contents/MacOS/berd-call");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, []).unwrap();
+        let link = directory.path().join("berd-call");
+        symlink(&executable, &link).unwrap();
+
+        std::fs::remove_file(&executable).unwrap();
+        assert_eq!(bundled_app_path(&link), Some(app.clone()));
+        assert_eq!(bundled_app_path(&executable), Some(app));
+    }
+
     #[test]
     fn status_cues_ignore_pending_recognition_but_suppress_actual_audio() {
         let mut core = SessionCore::default();
@@ -7485,6 +7689,35 @@ mod tests {
         assert_eq!(messages[0]["origin"], "user");
         assert_eq!(messages[1]["type"], "state");
         assert_eq!(messages[1]["confirmed_token"], 1);
+    }
+
+    #[test]
+    fn live_handoff_exposes_its_id_for_provider_tool_output() {
+        let mut core = RealtimeExpertSpokespersonSession::new(0, "external-test");
+        let mut emitted_token = 0;
+        let mut output = Vec::new();
+        let handoff_id = match record_and_emit_live_event(
+            &mut core,
+            &mut emitted_token,
+            LiveSideEvent::Handoff {
+                call_id: "provider-call-1".into(),
+                message: "Look something up".into(),
+            },
+            &mut output,
+        )
+        .unwrap()
+        {
+            LiveSideEvent::Handoff { call_id, .. } => call_id,
+            _ => panic!("a live handoff must expose its generated ID"),
+        };
+        assert_eq!(handoff_id, "handoff-external-test-1");
+        let tool_output = berd_call::openai_realtime_protocol::accepted_handoff_tool_output(
+            "provider-call-1",
+            &handoff_id,
+        )
+        .unwrap();
+        assert_eq!(tool_output["type"], "conversation.item.create");
+        assert_eq!(tool_output["item"]["call_id"], "provider-call-1");
     }
 
     #[test]
@@ -9358,6 +9591,7 @@ mod tests {
                 },
                 stt: SttBackendConfig::Macos,
                 mode: SessionMode::Conventional,
+                endpoints: SessionEndpointOverrides::default(),
             }
         );
 
@@ -9367,6 +9601,7 @@ mod tests {
                 tts: TtsBackendConfig::OpenAi { rate: 1.0 },
                 stt: SttBackendConfig::Macos,
                 mode: SessionMode::Conventional,
+                endpoints: SessionEndpointOverrides::default(),
             }
         );
     }
@@ -9442,6 +9677,7 @@ mod tests {
                 },
                 stt: SttBackendConfig::Macos,
                 mode: SessionMode::Conventional,
+                endpoints: SessionEndpointOverrides::default(),
             }
         );
         assert!(parse_args(&args(&[
@@ -9496,6 +9732,7 @@ mod tests {
             },
             stt: SttBackendConfig::Macos,
             mode: SessionMode::ExpertSpokesperson,
+            endpoints: SessionEndpointOverrides::default(),
         };
         let mut realtime = OpenAiSpokespersonConfig {
             endpoint: "ws://localhost".into(),
@@ -9514,6 +9751,91 @@ mod tests {
 
         assert_eq!(realtime.speed(), 1.5);
         assert_eq!(realtime.voice(), "marin");
+    }
+
+    #[test]
+    fn session_endpoint_overrides_are_independent_and_require_matching_modes() {
+        let realtime = parse_args(&args(&[
+            "berd-call",
+            "session",
+            "--tts-backend",
+            "openai",
+            "--mode",
+            "expert-spokesperson",
+            "--realtime-url",
+            "ws://127.0.0.1:18870/v1/realtime",
+        ]))
+        .unwrap();
+        assert_eq!(
+            realtime.endpoints.realtime.as_deref(),
+            Some("ws://127.0.0.1:18870/v1/realtime")
+        );
+        assert_eq!(realtime.endpoints.stt, None);
+        assert_eq!(realtime.endpoints.tts, None);
+
+        let chained = parse_args(&args(&[
+            "berd-call",
+            "session",
+            "--tts-backend",
+            "openai",
+            "--stt-backend",
+            "openai",
+            "--tts-url",
+            "https://proxy.example/v1/audio/speech?api-version=1",
+            "--stt-url",
+            "wss://proxy.example/v1/realtime?intent=transcription",
+        ]))
+        .unwrap();
+        assert_eq!(
+            chained.endpoints.tts.as_deref(),
+            Some("https://proxy.example/v1/audio/speech?api-version=1")
+        );
+        assert_eq!(
+            chained.endpoints.stt.as_deref(),
+            Some("wss://proxy.example/v1/realtime?intent=transcription")
+        );
+        assert!(parse_endpoint_url("http://example.test/speech", "--tts-url", false).is_err());
+        assert!(parse_endpoint_url("ws://example.test/realtime", "--stt-url", true).is_err());
+        assert!(parse_endpoint_url("http://127.0.0.1:18870/speech", "--tts-url", false).is_ok());
+        assert!(parse_args(&args(&[
+            "berd-call",
+            "session",
+            "--tts-backend",
+            "openai",
+            "--realtime-url",
+            "ws://localhost/realtime"
+        ]))
+        .unwrap_err()
+        .contains("expert-spokesperson"));
+        assert!(parse_args(&args(&[
+            "berd-call",
+            "session",
+            "--tts-url",
+            "wss://localhost/audio/speech"
+        ]))
+        .is_err());
+        assert!(parse_args(&args(&[
+            "berd-call",
+            "session",
+            "--tts-backend",
+            "openai",
+            "--stt-url",
+            "wss://localhost/realtime"
+        ]))
+        .unwrap_err()
+        .contains("--stt-backend openai"));
+        assert!(parse_args(&args(&[
+            "berd-call",
+            "session",
+            "--tts-backend",
+            "openai",
+            "--mode",
+            "expert-spokesperson",
+            "--tts-url",
+            "https://localhost/audio/speech"
+        ]))
+        .unwrap_err()
+        .contains("only to conventional mode"));
     }
 
     #[test]
@@ -9538,6 +9860,7 @@ mod tests {
                 },
                 stt: SttBackendConfig::Macos,
                 mode: SessionMode::Conventional,
+                endpoints: SessionEndpointOverrides::default(),
             }
         );
         assert!(parse_args(&args(&[
@@ -9598,6 +9921,7 @@ mod tests {
                     model_dir: PathBuf::from("/models/parakeet")
                 },
                 mode: SessionMode::Conventional,
+                endpoints: SessionEndpointOverrides::default(),
             }
         );
         assert!(parse_args(&args(&[
@@ -10041,6 +10365,7 @@ mod tests {
                 },
                 stt: SttBackendConfig::OpenAi,
                 mode: SessionMode::Conventional,
+                endpoints: SessionEndpointOverrides::default(),
             }
         );
     }
@@ -11123,6 +11448,27 @@ mod tests {
         let saved = changed.saved.unwrap().1;
         assert_eq!(saved.tts.unwrap().rate(), 1.2);
         assert!(!saved.arguments.contains(&"--codex".into()));
+        let with_endpoint = parse_saved_start_args_at(
+            &args(&[
+                "berd-call",
+                "start",
+                "--stt-backend",
+                "openai",
+                "--stt-url",
+                "wss://proxy.example/v1/realtime?intent=transcription",
+            ]),
+            directory.path().join("settings.json"),
+        )
+        .unwrap();
+        assert!(with_endpoint
+            .session_arguments
+            .contains(&"--stt-url".into()));
+        assert!(!with_endpoint
+            .saved
+            .unwrap()
+            .1
+            .arguments
+            .contains(&"--stt-url".into()));
     }
 
     #[test]

@@ -229,6 +229,7 @@ pub fn run() {
             app.manage(commands::automations::AutomationStreamState::default());
             app.manage(commands::terminal::TerminalState::default());
             app.manage(commands::window_session::WindowSessionRegistry::default());
+            app.manage(commands::message_search::MessageSearchState::default());
             app.manage(commands::agent_setup::AgentSetupRegistry::default());
             app.manage(services::remote_backend::RemoteBackendRegistry::default());
             app.manage(commands::model_setup::ModelSetupRegistry::default());
@@ -468,6 +469,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::message_search::search_session_messages,
             commands::pr_tracker::open_pr_tracker_url,
             commands::pr_tracker::resolve_pr_tracker_projects,
             commands::pr_tracker::list_pr_tracker_pull_requests,
@@ -605,6 +607,8 @@ pub fn run() {
             commands::model_setup::clear_model_setup_status,
             commands::notifications::show_completion_notification,
             commands::openai_realtime::get_openai_realtime_status,
+            commands::openai_realtime::set_openai_realtime_api_key,
+            commands::openai_realtime::clear_openai_realtime_api_key,
             commands::openai_realtime::create_openai_realtime_session,
             commands::openai_realtime::start_openai_realtime_spokesperson_runtime,
             commands::openai_realtime::send_openai_realtime_spokesperson_runtime_event,
@@ -679,6 +683,8 @@ pub fn run() {
             commands::pocket_voice::stop_pocket_voice,
             commands::pocket_voice::remove_voice_model,
             commands::openai_audio::get_openai_voice_status,
+            commands::openai_voice_endpoints::get_openai_voice_endpoints,
+            commands::openai_voice_endpoints::set_openai_voice_endpoint,
             commands::openai_audio::set_openai_stt_api_key,
             commands::openai_audio::clear_openai_stt_api_key,
             commands::openai_audio::set_openai_tts_api_key,
