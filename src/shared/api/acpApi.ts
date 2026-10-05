@@ -384,10 +384,7 @@ export async function updateWorkingDir(
   beforeUpdate?: () => void,
 ): Promise<void> {
   const client = await getClientForSession(sessionId);
-  const cwd = await resolveAcpWireCwd(
-    workingDir,
-    getSessionBackend(sessionId),
-  );
+  const cwd = await resolveAcpWireCwd(workingDir, getSessionBackend(sessionId));
   // Run guards after the asynchronous client lookup and synchronously before
   // dispatching the mutation. This lets callers close local state races
   // without exposing the ACP client or duplicating the wire operation.
@@ -523,10 +520,7 @@ export async function loadSession(
   const tClient = performance.now();
   const client = await getClientForSession(sessionId);
   const tCall = performance.now();
-  const cwd = await resolveAcpWireCwd(
-    workingDir,
-    getSessionBackend(sessionId),
-  );
+  const cwd = await resolveAcpWireCwd(workingDir, getSessionBackend(sessionId));
   const response = await client.loadSession({
     sessionId: getWireSessionId(sessionId),
     cwd,
