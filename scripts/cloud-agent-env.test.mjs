@@ -7,7 +7,10 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dockerfile = readFileSync(join(root, ".cursor/Dockerfile"), "utf8");
-const install = readFileSync(join(root, "scripts/cloud-agent-install.sh"), "utf8");
+const install = readFileSync(
+  join(root, "scripts/cloud-agent-install.sh"),
+  "utf8",
+);
 
 test("Dockerfile does not unconditionally create the ubuntu user", () => {
   assert.match(
