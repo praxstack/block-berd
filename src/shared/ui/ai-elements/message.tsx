@@ -663,6 +663,14 @@ function isBareLocalMarkdownPath(value: string): boolean {
   );
 }
 
+function normalizeDotRelativeHref(value: string): string {
+  if (!value.startsWith("./") || value.startsWith("./../")) {
+    return value;
+  }
+  const rest = value.slice(2);
+  return isBareLocalMarkdownPath(rest) ? rest : value;
+}
+
 function isValidBerdSessionDeepLink(value: string): boolean {
   return parseSessionDeepLink(value) !== null;
 }
@@ -687,8 +695,10 @@ function visitMarkdownDestinations(
 function prefixBerdMarkdownDestinations() {
   return (tree: MarkdownHastNode) => {
     visitMarkdownDestinations(tree, (value, property) => {
-      if (isBareLocalMarkdownPath(value)) {
-        return `${BERD_LOCAL_PATH_PREFIX}${encodeURIComponent(value)}`;
+      const hrefValue =
+        property === "href" ? normalizeDotRelativeHref(value) : value;
+      if (isBareLocalMarkdownPath(hrefValue)) {
+        return `${BERD_LOCAL_PATH_PREFIX}${encodeURIComponent(hrefValue)}`;
       }
       if (property === "href" && isValidBerdSessionDeepLink(value)) {
         return `${BERD_SESSION_LINK_PREFIX}${encodeURIComponent(value)}`;
