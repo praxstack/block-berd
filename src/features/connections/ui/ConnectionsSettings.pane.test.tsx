@@ -170,8 +170,9 @@ describe("ConnectionsSettings", () => {
   it("organizes managed and local connections without installed or available sections", async () => {
     testState.managed = true;
     renderConnectionsSettings();
+    expect(await screen.findByText("Slack")).toBeInTheDocument();
     expect(
-      await screen.findByText("connections.sections.managed"),
+      screen.getByText("connections.sections.managed"),
     ).toBeInTheDocument();
     expect(screen.getByText("connections.sections.local")).toBeInTheDocument();
     expect(
@@ -247,9 +248,7 @@ describe("ConnectionsSettings", () => {
     expect(
       await screen.findByRole("dialog", { name: "extensions.addExtension" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("extensions.fields.name"),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("extensions.fields.name")).toBeInTheDocument();
   });
 
   it("renders no page wrapper so the caller owns the settings pane", () => {
