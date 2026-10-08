@@ -26,6 +26,7 @@ import {
   getWireSessionId,
   registerSessionBackend,
 } from "./acpSessionBackends";
+import { resolveAcpWireCwd } from "./acpCwd";
 import {
   applySessionConfigOptionsSnapshot,
   readSessionConfigOptionsSnapshots,
@@ -249,9 +250,10 @@ export async function forkSession(
 ): Promise<AcpSessionInfo> {
   const backendId = getSessionBackend(sessionId);
   const client = await getBackendClient(backendId);
+  const cwd = await resolveAcpWireCwd(workingDir, backendId);
   const params: ForkSessionRequest = {
     sessionId: getWireSessionId(sessionId),
-    cwd: workingDir,
+    cwd,
     mcpServers: [],
   };
   if (isValidConversationBefore(options.conversationBefore)) {
@@ -273,7 +275,7 @@ export async function forkSession(
     userSetName: response._meta?.userSetName === true,
     messageCount: metaNumber(response._meta, "messageCount") ?? 0,
     subtitle: mapLastMessageSnippet(response._meta?.lastMessageSnippet),
-    workingDir,
+    workingDir: cwd,
     projectId: metaString(response._meta, "projectId"),
     providerId: metaString(response._meta, "providerId"),
     modelId: metaString(response._meta, "modelId"),
@@ -417,13 +419,14 @@ export async function updateWorkingDir(
   beforeUpdate?: () => void,
 ): Promise<void> {
   const client = await getClientForSession(sessionId);
+  const cwd = await resolveAcpWireCwd(workingDir, getSessionBackend(sessionId));
   // Run guards after the asynchronous client lookup and synchronously before
   // dispatching the mutation. This lets callers close local state races
   // without exposing the ACP client or duplicating the wire operation.
   beforeUpdate?.();
   await client.goose.GooseUnstableSessionWorkingDirUpdate({
     sessionId: getWireSessionId(sessionId),
-    workingDir,
+    workingDir: cwd,
   });
 }
 
@@ -517,8 +520,9 @@ export async function newSession(
   const backendId = options.backendId ?? LOCAL_BACKEND_ID;
   const tClient = performance.now();
   const client = await getBackendClient(backendId);
+  const cwd = await resolveAcpWireCwd(workingDir, backendId);
   const request: Parameters<typeof client.newSession>[0] = {
-    cwd: workingDir,
+    cwd,
     mcpServers: [],
   };
 
@@ -553,9 +557,10 @@ export async function loadSession(
   const client = await getClientForSession(sessionId);
   assertActive?.();
   const tCall = performance.now();
+  const cwd = await resolveAcpWireCwd(workingDir, getSessionBackend(sessionId));
   const response = await client.loadSession({
     sessionId: getWireSessionId(sessionId),
-    cwd: workingDir,
+    cwd,
     mcpServers: [],
   });
   assertActive?.();
