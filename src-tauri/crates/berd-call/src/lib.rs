@@ -8,6 +8,7 @@ mod audio_output;
 pub mod benchmark;
 pub mod causal_inbox;
 mod configured_tts;
+pub mod endpoint_url;
 pub mod expert_spokesperson;
 pub mod input;
 pub mod local_assets;
@@ -37,6 +38,8 @@ pub mod spokesperson_voice_update;
 mod status_sounds;
 mod synthesis;
 mod tts;
+#[cfg(target_os = "macos")]
+pub mod update_guard;
 
 pub use audio_output::{wait_until_drained, PcmAudioOutput};
 pub use configured_tts::{

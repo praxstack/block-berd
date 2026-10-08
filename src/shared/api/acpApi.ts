@@ -149,11 +149,14 @@ function mapSessionInfo(info: SessionInfo): AcpSessionInfo {
 
 export async function getSessionInfo(
   sessionId: string,
+  assertActive?: () => void,
 ): Promise<AcpSessionInfo> {
   const client = await getClientForSession(sessionId);
+  assertActive?.();
   const result = await client.goose.GooseUnstableSessionInfo({
     sessionId: getWireSessionId(sessionId),
   });
+  assertActive?.();
   const info = mapSessionInfo(result.session as unknown as SessionInfo);
   // The backend echoes its bare wire id; callers hold the composite id.
   return { ...info, sessionId };
@@ -163,12 +166,18 @@ export async function listSessionsPage({
   cursor,
   query,
   backendId,
+  workingDir,
+  types,
+  includeLastMessageSnippet = true,
 }: {
   cursor?: string | null;
   /** Keyword filter for goose's server-side message-content search
    *  (`_meta.query`). Only set when searching; omit for plain listing. */
   query?: string | null;
   backendId?: AcpBackendId;
+  workingDir?: string;
+  types?: ("user" | "scheduled" | "acp")[];
+  includeLastMessageSnippet?: boolean;
 } = {}): Promise<AcpSessionsPage> {
   const resolvedBackendId = backendId ?? LOCAL_BACKEND_ID;
   const client = await getBackendClient(resolvedBackendId);
@@ -178,10 +187,15 @@ export async function listSessionsPage({
   // membership lives in _meta.projectId, so callers must paginate globally and
   // group by projectId client-side instead of using cwd as a proxy.
   const params: ListSessionsRequest = {
-    _meta: normalizedQuery
-      ? listSessionsMeta(normalizedQuery)
-      : LIST_SESSIONS_META,
+    _meta: {
+      ...(normalizedQuery
+        ? listSessionsMeta(normalizedQuery)
+        : LIST_SESSIONS_META),
+      goose: { includeLastMessageSnippet },
+      ...(types?.length ? { types } : {}),
+    },
   };
+  if (workingDir) params.cwd = workingDir;
   if (normalizedCursor != null) {
     params.cursor = normalizedCursor;
   }
@@ -270,17 +284,26 @@ export async function forkSession(
 export async function setModel(
   sessionId: string,
   modelId: string,
-  context: { providerId?: string; requestId?: string } = {},
+  context: {
+    providerId?: string;
+    requestId?: string;
+    assertActive?: () => void;
+  } = {},
 ): Promise<AcpSessionConfigSnapshots> {
+  const { assertActive, ...snapshotContext } = context;
   const sid = sessionId.slice(0, 8);
   const tClient = performance.now();
   const client = await getClientForSession(sessionId);
+  // A queued mutation may time out while client setup or the wire call awaits.
+  // Never send more work or publish a response after its owner abandons it.
+  assertActive?.();
   const tCall = performance.now();
   const response = await client.setSessionConfigOption({
     sessionId: getWireSessionId(sessionId),
     configId: "model",
     value: modelId,
   });
+  assertActive?.();
   const snapshots = readSessionConfigOptionsSnapshots(response);
   logReasoningEffortInfo("setModel response", {
     sessionId: shortLogId(sessionId),
@@ -293,7 +316,7 @@ export async function setModel(
   });
   applySessionConfigOptionsSnapshot(sessionId, response, {
     origin: "response",
-    ...context,
+    ...snapshotContext,
     modelId: snapshots.model?.modelId ?? modelId,
   });
   perfLog(
@@ -306,17 +329,24 @@ export async function setSessionConfigOption(
   sessionId: string,
   configId: string,
   value: string,
-  context: Omit<AcpSessionConfigSnapshotContext, "origin"> = {},
+  context: Omit<AcpSessionConfigSnapshotContext, "origin"> & {
+    assertActive?: () => void;
+  } = {},
 ): Promise<AcpSessionConfigSnapshots> {
+  const { assertActive, ...snapshotContext } = context;
   const sid = sessionId.slice(0, 8);
   const tClient = performance.now();
   const client = await getClientForSession(sessionId);
+  // A queued mutation may time out while client setup or the wire call awaits.
+  // Never send more work or publish a response after its owner abandons it.
+  assertActive?.();
   const tCall = performance.now();
   const response = await client.setSessionConfigOption({
     sessionId: getWireSessionId(sessionId),
     configId,
     value,
   });
+  assertActive?.();
   const snapshots = readSessionConfigOptionsSnapshots(response);
   logReasoningEffortInfo("setSessionConfigOption response", {
     sessionId: shortLogId(sessionId),
@@ -330,7 +360,7 @@ export async function setSessionConfigOption(
   });
   applySessionConfigOptionsSnapshot(sessionId, response, {
     origin: "response",
-    ...context,
+    ...snapshotContext,
   });
   perfLog(
     `[perf:api] ${sid} setSessionConfigOption(${configId}=${value}) getClient=${(tCall - tClient).toFixed(1)}ms wire=${(performance.now() - tCall).toFixed(1)}ms`,
@@ -341,11 +371,15 @@ export async function setSessionConfigOption(
 export async function setProvider(
   sessionId: string,
   providerId: string,
-  context: { requestId?: string } = {},
+  context: { requestId?: string; assertActive?: () => void } = {},
 ): Promise<AcpSessionConfigSnapshots> {
+  const { assertActive, ...snapshotContext } = context;
   const sid = sessionId.slice(0, 8);
   const tClient = performance.now();
   const client = await getClientForSession(sessionId);
+  // A queued mutation may time out while client setup or the wire call awaits.
+  // Never send more work or publish a response after its owner abandons it.
+  assertActive?.();
   const wireProvider = toWireProviderId(providerId);
   const tCall = performance.now();
   const response = await client.setSessionConfigOption({
@@ -353,6 +387,7 @@ export async function setProvider(
     configId: "provider",
     value: wireProvider,
   });
+  assertActive?.();
   const snapshots = readSessionConfigOptionsSnapshots(response);
   logReasoningEffortInfo("setProvider response", {
     sessionId: shortLogId(sessionId),
@@ -366,7 +401,7 @@ export async function setProvider(
   });
   applySessionConfigOptionsSnapshot(sessionId, response, {
     origin: "response",
-    ...context,
+    ...snapshotContext,
     providerId,
     modelId: snapshots.model?.modelId,
   });
@@ -511,16 +546,19 @@ export async function newSession(
 export async function loadSession(
   sessionId: string,
   workingDir: string,
+  assertActive?: () => void,
 ): Promise<LoadSessionResponse> {
   const sid = sessionId.slice(0, 8);
   const tClient = performance.now();
   const client = await getClientForSession(sessionId);
+  assertActive?.();
   const tCall = performance.now();
   const response = await client.loadSession({
     sessionId: getWireSessionId(sessionId),
     cwd: workingDir,
     mcpServers: [],
   });
+  assertActive?.();
   const snapshots = readSessionConfigOptionsSnapshots(response);
   logReasoningEffortInfo("loadSession response", {
     sessionId: shortLogId(sessionId),
