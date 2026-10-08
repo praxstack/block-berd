@@ -1267,6 +1267,13 @@ describe("GlobalComposerPill", () => {
     expect(textbox).toHaveFocus();
   });
 
+  it("does not opt the textarea out of the global focus reset", () => {
+    render(<GlobalComposerPill onSend={vi.fn()} placement="centered" />);
+    const textbox = screen.getByRole("textbox");
+    expect(textbox).not.toHaveClass("focus-override");
+    expect(textbox).toHaveClass("focus-visible:ring-0");
+  });
+
   it("does not focus the textarea when mounted with a consumed focusRequest", () => {
     render(<GlobalComposerPill onSend={vi.fn()} focusRequest={1} />);
 
