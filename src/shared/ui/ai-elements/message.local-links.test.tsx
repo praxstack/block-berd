@@ -17,6 +17,20 @@ describe("MessageResponse local Markdown links", () => {
     expect(screen.queryByText("[blocked]", { exact: false })).toBeNull();
   });
 
+  it("normalizes ./relative hrefs to the bare path the artifact resolver already supports", () => {
+    render(
+      <MessageResponse mode="static">
+        {"Open the [report](./report.html)."}
+      </MessageResponse>,
+    );
+
+    expect(screen.getByRole("link", { name: "report" })).toHaveAttribute(
+      "href",
+      "report.html",
+    );
+    expect(screen.queryByText("[blocked]", { exact: false })).toBeNull();
+  });
+
   it("preserves percent-encoded bare relative paths for artifact resolution", () => {
     render(
       <MessageResponse mode="static">
@@ -28,6 +42,17 @@ describe("MessageResponse local Markdown links", () => {
       "href",
       "wiki/research/my%20report.md",
     );
+  });
+
+  it("does not treat ./http: as a local filesystem path", () => {
+    render(
+      <MessageResponse mode="static">
+        {"Do not open [this](./http:alert(1))."}
+      </MessageResponse>,
+    );
+
+    const link = screen.queryByRole("link", { name: "this" });
+    expect(link?.getAttribute("href")).not.toBe("http:alert(1)");
   });
 
   it("still blocks unsafe link schemes", () => {
