@@ -7,6 +7,7 @@ import type {
 import type { ProviderFieldValue } from "@/shared/types/providers";
 import { getClient } from "@/shared/api/acpConnection";
 import { shareInFlight } from "@/shared/lib/shareInFlight";
+import { normalizeProviderFieldUpdates } from "@/features/providers/lib/normalizeProviderHost";
 
 export type ProviderStatus = ProviderConfigStatusDto;
 export type ProviderFieldSaveInput = ProviderConfigFieldUpdate;
@@ -28,7 +29,7 @@ export async function saveProviderConfig(
   const client = await getClient();
   const response = await client.goose.GooseUnstableProvidersConfigSave({
     providerId,
-    fields,
+    fields: normalizeProviderFieldUpdates(fields),
   });
   return response;
 }
