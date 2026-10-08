@@ -137,6 +137,8 @@ BERD_SKILLS_TIER=praxstack ./scripts/install-agent-skills.sh  # PraxStack layer 
 
 **gstack** (`/plan-ceo-review`, `/ship`, `/qa`, …) also needs its runtime: `./scripts/install-gstack-runtime.sh` (runs automatically at the end of the skill install script when CORE tier runs).
 
+For non-trivial work, read `.codex/skill-stack.json` first and load those active skills before searching the rest of the armory.
+
 - Stack tiers, conflict warnings, and optional tools: `.agents/skills/README.md`
 - PraxStack goals, personas, workflows: `docs/agents/goals.md`
 - MCP servers (Context7): `.cursor/mcp.json`

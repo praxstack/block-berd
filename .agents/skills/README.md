@@ -266,3 +266,8 @@ Some packs (pstack, superpowers, compound-engineering) also ship as Cursor marke
 ```
 
 Project-local copies in `.agents/skills/` work in Cloud Agents and keep skills versioned with the repo.
+
+## Skill-stack profile
+
+Checked-in discovery profile: `.codex/skill-stack.json`. It names Berd-owned skills plus the layered-pipeline entry points. Agents should read that profile before loading arbitrary skills from this armory; searching outside the profile is allowed when the task is not covered.
+
