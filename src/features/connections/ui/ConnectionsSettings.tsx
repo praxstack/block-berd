@@ -8,6 +8,7 @@ import {
   type Connection,
   listConnections,
 } from "@/features/connections/api/connections";
+import { LOCAL_MCP_INVENTORY_QUERY_KEY } from "@/features/connections/api/localMcpInventory";
 import { OAUTH_PROVIDERS } from "@/features/connections/catalog";
 import { resolveConnectionStatus } from "@/features/connections/lib/connectionStatus";
 import {
@@ -15,7 +16,9 @@ import {
   filterGridItems,
   type ConnectionGridItem,
 } from "@/features/connections/lib/connectionGrid";
-import type { SetupChatRequest } from "@/features/chat/lib/setupChatRequest";
+import type { ExtensionConfig } from "@/features/extensions/types";
+import { useExtensionsSettings } from "@/features/extensions/hooks/useExtensionsSettings";
+import { ExtensionModal } from "@/features/extensions/ui/ExtensionModal";
 import { useProjectStore } from "@/features/projects/stores/projectStore";
 import { useProfileCapability } from "@/shared/profile/capabilities";
 import { Button } from "@/shared/ui/button";
@@ -53,13 +56,7 @@ function SectionSkeleton({ title }: { title: string }) {
  * connections first when the distribution enables them, followed by MCPs
  * configured locally for Goose, Claude Code, and Codex.
  */
-export interface ConnectionsSettingsProps {
-  onAskAgentToAddMcp?: (request: SetupChatRequest) => void;
-}
-
-export function ConnectionsSettings({
-  onAskAgentToAddMcp,
-}: ConnectionsSettingsProps) {
+export function ConnectionsSettings() {
   const { t } = useTranslation("settings");
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
@@ -68,6 +65,7 @@ export function ConnectionsSettings({
     state.projects.find((project) => project.id === state.activeProjectId),
   );
   const workspacePaths = activeProject?.workingDirs ?? [];
+  const extensions = useExtensionsSettings();
 
   const managedQuery = useQuery({
     queryKey: CONNECTIONS_QUERY_KEY,
@@ -119,10 +117,14 @@ export function ConnectionsSettings({
     () => filterGridItems(managedItems, searchTerm),
     [managedItems, searchTerm],
   );
-  const askAgentToAddConnection = () => {
-    onAskAgentToAddMcp?.({
-      title: t("connections.askAgentTitle"),
-      prompt: t("connections.askAgentPrompt"),
+
+  const handleSubmitExtension = async (
+    name: string,
+    config: ExtensionConfig,
+  ) => {
+    await extensions.handleSubmit(name, config);
+    void queryClient.invalidateQueries({
+      queryKey: LOCAL_MCP_INVENTORY_QUERY_KEY,
     });
   };
 
@@ -135,17 +137,15 @@ export function ConnectionsSettings({
         titleClassName="font-medium"
         descriptionClassName="text-xs font-normal text-muted-foreground"
         actions={
-          onAskAgentToAddMcp ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={askAgentToAddConnection}
-            >
-              <IconPlus className="size-3.5" />
-              {t("connections.askAgent")}
-            </Button>
-          ) : null
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={extensions.handleAdd}
+          >
+            <IconPlus className="size-3.5" />
+            {t("connections.askAgent")}
+          </Button>
         }
       />
 
@@ -185,14 +185,21 @@ export function ConnectionsSettings({
         <LocalMcpSection
           searchTerm={searchTerm}
           workspacePaths={workspacePaths}
-          onAddConnection={
-            onAskAgentToAddMcp ? askAgentToAddConnection : undefined
-          }
+          onAddConnection={extensions.handleAdd}
         />
 
         {/* Renders nothing unless the remote-ssh-sessions experiment is on. */}
         <RemoteHostsSettings />
       </SettingsSections>
+
+      {extensions.modalMode ? (
+        <ExtensionModal
+          extension={extensions.editingExtension ?? undefined}
+          onSubmit={handleSubmitExtension}
+          onDelete={extensions.handleDelete}
+          onClose={extensions.handleModalClose}
+        />
+      ) : null}
     </div>
   );
 }
