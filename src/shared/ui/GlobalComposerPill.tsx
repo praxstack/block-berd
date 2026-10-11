@@ -1435,7 +1435,7 @@ export function GlobalComposerPill({
                 aria-controls={mentionOpen ? mentionListboxId : undefined}
                 aria-describedby={mentionOpen ? mentionStatusId : undefined}
                 className={cn(
-                  "focus-override max-h-[200px] w-full resize-none appearance-none overflow-y-auto overscroll-contain scrollbar-none border-0 bg-transparent text-sm leading-5 text-foreground outline-none placeholder:text-foreground/40 placeholder:transition-colors placeholder:duration-200 placeholder:ease-out group-hover:placeholder:text-foreground group-focus-within:placeholder:text-foreground focus:outline-none focus:ring-0",
+                  "max-h-[200px] w-full resize-none appearance-none overflow-y-auto overscroll-contain scrollbar-none border-0 bg-transparent text-sm leading-5 text-foreground outline-none placeholder:text-foreground/40 placeholder:transition-colors placeholder:duration-200 placeholder:ease-out group-hover:placeholder:text-foreground group-focus-within:placeholder:text-foreground focus:outline-none focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0",
                   handoffActive && "caret-transparent",
                   expanded
                     ? "min-h-10 py-2.5 pr-2"
