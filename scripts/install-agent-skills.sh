@@ -13,17 +13,23 @@ cd "$repo_root"
 readonly BERD_SKILLS_TIER="${BERD_SKILLS_TIER:-core}"
 readonly BERD_PRAXSTACK_SKILLS="${BERD_PRAXSTACK_SKILLS:-}"
 
-# Pin skills CLI when skills-lock.json records a version (falls back to latest).
+# Pin skills CLI to skills-lock.json (skillsCli). Override with SKILLS_CLI_VERSION.
+# Do not fall back to @latest — that makes refresh non-reproducible.
 skills_cli_version() {
+  if [[ -n "${SKILLS_CLI_VERSION:-}" ]]; then
+    echo "$SKILLS_CLI_VERSION"
+    return
+  fi
   if [[ -f "$repo_root/skills-lock.json" ]] && command -v jq >/dev/null 2>&1; then
     local pinned
     pinned="$(jq -r '.skillsCli // empty' "$repo_root/skills-lock.json" 2>/dev/null || true)"
-    if [[ -n "$pinned" ]]; then
+    if [[ -n "$pinned" && "$pinned" != "null" ]]; then
       echo "$pinned"
       return
     fi
   fi
-  echo "latest"
+  echo "error: skills-lock.json is missing skillsCli; set SKILLS_CLI_VERSION to pin the adapter" >&2
+  exit 1
 }
 
 readonly SKILLS_CLI="$(skills_cli_version)"
@@ -152,8 +158,8 @@ install_extended_tier() {
 #
 #   install_skills remotion-dev/skills --skill remotion-best-practices
 #   install_skills nvidia/skills --skill <name>   # 343 skills — pick one
-#   npx skills add microsoft/skills --list        # armory only
-#   npx skills add wshobson/agents --list         # 94 plugins — do NOT bulk install
+#   npx --yes "skills@${SKILLS_CLI}" add microsoft/skills --list        # armory only
+#   npx --yes "skills@${SKILLS_CLI}" add wshobson/agents --list         # 94 plugins — do NOT bulk install
 install_optional_tier() {
   echo "OPTIONAL tier: no bulk installs (see .agents/skills/README.md)."
 }
@@ -163,8 +169,8 @@ install_optional_tier() {
 #   install_pack cloudflare/skills
 #   install_pack aws/agent-toolkit-for-aws/skills
 # Microsoft skills: searchable armory only — do NOT install whole repo (context rot).
-#   npx skills@latest add microsoft/skills --list
-#   npx skills@latest add microsoft/skills --skill <name> -a cursor -y --copy
+#   npx --yes "skills@${SKILLS_CLI}" add microsoft/skills --list
+#   npx --yes "skills@${SKILLS_CLI}" add microsoft/skills --skill <name> -a cursor -y --copy
 
 echo "BERD_SKILLS_TIER=$BERD_SKILLS_TIER"
 
