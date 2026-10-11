@@ -1,0 +1,38 @@
+{
+  "name": "berd-default",
+  "profileFirst": true,
+  "allowSearchOutsideProfile": true,
+  "activeSkills": [
+    "assistive-ux",
+    "berdctl-new-command",
+    "code-review",
+    "create-pr",
+    "experimental-features",
+    "find-skills",
+    "to-spec",
+    "triage",
+    "poteto-mode",
+    "architect",
+    "writing-plans",
+    "improve",
+    "how",
+    "executing-plans",
+    "tdd",
+    "systematic-debugging",
+    "requesting-code-review",
+    "receiving-code-review",
+    "verification-before-completion",
+    "make-pr-easy-to-review",
+    "agent-browser"
+  ],
+  "layers": {
+    "discover": ["find-skills", "how"],
+    "interrogate": ["to-spec", "triage"],
+    "plan": ["poteto-mode", "writing-plans", "architect", "improve"],
+    "implement": ["executing-plans", "tdd", "systematic-debugging"],
+    "review": ["code-review", "requesting-code-review", "receiving-code-review"],
+    "qa": ["agent-browser", "verification-before-completion"],
+    "ship": ["create-pr", "make-pr-easy-to-review", "berdctl-new-command"],
+    "product": ["assistive-ux", "experimental-features"]
+  }
+}
