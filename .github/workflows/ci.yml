@@ -32,6 +32,9 @@ jobs:
       - name: Activate Hermit
         uses: cashapp/activate-hermit@cea9af7913204a965fd488637a8d1811bba2e616 # v1
 
+      - name: Verify skills lock
+        run: just verify-skills-lock
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
