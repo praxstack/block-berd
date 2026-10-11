@@ -85,6 +85,26 @@ describe("provider credential API", () => {
     });
   });
 
+  it("strips a trailing /v1 from LMSTUDIO_HOST before saving", async () => {
+    mocks.configSave.mockResolvedValue({
+      status: { providerId: "lmstudio", isConfigured: true },
+      refresh: { started: ["lmstudio"], skipped: [] },
+    });
+
+    await saveProviderConfig("lmstudio", [
+      { key: "LMSTUDIO_HOST", value: "http://localhost:1234/v1" },
+      { key: "LMSTUDIO_API_KEY", value: "sk-test" },
+    ]);
+
+    expect(mocks.configSave).toHaveBeenCalledWith({
+      providerId: "lmstudio",
+      fields: [
+        { key: "LMSTUDIO_HOST", value: "http://localhost:1234" },
+        { key: "LMSTUDIO_API_KEY", value: "sk-test" },
+      ],
+    });
+  });
+
   it("deletes provider config through ACP", async () => {
     const response = {
       status: {
