@@ -64,6 +64,11 @@ vi.mock("../acpConnection", () => ({
     mocks.interceptSessionNotifications(...args),
 }));
 
+vi.mock("../system", () => ({
+  getHomeDir: vi.fn().mockResolvedValue("/Users/ada"),
+  getCachedHomeDir: vi.fn().mockReturnValue("/Users/ada"),
+}));
+
 describe("promptForText", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -708,6 +713,31 @@ describe("provider wire translation", () => {
       mcpServers: [],
       _meta: { hidden: true },
     });
+  });
+
+  it("expands a local ~ cwd before newSession hits the wire", async () => {
+    const { newSession } = await import("../acpApi");
+
+    await newSession("~");
+
+    expect(mocks.newSession).toHaveBeenCalledWith({
+      cwd: "/Users/ada",
+      mcpServers: [],
+    });
+  });
+
+  it("does not expand ~ for a remote backend", async () => {
+    mocks.newSession.mockResolvedValueOnce({ sessionId: "remote-1" });
+    const { newSession } = await import("../acpApi");
+    const { unregisterSessionBackend } = await import("../acpSessionBackends");
+
+    await newSession("~", { backendId: "ssh:box.example" });
+
+    expect(mocks.newSession).toHaveBeenCalledWith({
+      cwd: "~",
+      mcpServers: [],
+    });
+    unregisterSessionBackend("ssh:box.example#remote-1");
   });
 
   it("persists the default model provider when setProvider is given the goose sentinel", async () => {
